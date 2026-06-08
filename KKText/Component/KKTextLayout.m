@@ -441,7 +441,7 @@ dispatch_semaphore_signal(_lock);
         if (8.3 <= systemVersionDouble && systemVersionDouble < 9) {
             needFixJoinedEmojiBug = YES;
         }
-        if (systemVersionDouble >= 10) {
+        if (systemVersionDouble >= 10 && systemVersionDouble < 26) {
             needFixLayoutSizeBug = YES;
         }
     });
@@ -2399,7 +2399,7 @@ static void KKTextDrawRun(KKTextLine *line, CTRunRef run, CGContextRef context, 
                             if (mode) { // CJK glyph, need rotated
                                 CGFloat ofs = (ascent - descent) * 0.5;
                                 CGFloat w = glyphAdvances[g].width * 0.5;
-                                CGFloat x = x = line.position.x + verticalOffset + glyphPositions[g].y + (ofs - w);
+                                CGFloat x = line.position.x + verticalOffset + glyphPositions[g].y + (ofs - w);
                                 CGFloat y = -line.position.y + size.height - glyphPositions[g].x - (ofs + w);
                                 if (mode == KKTextRunGlyphDrawModeVerticalRotateMove) {
                                     x += w;
