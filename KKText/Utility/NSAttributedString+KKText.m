@@ -1099,17 +1099,13 @@ return style. _attr_;
                           value = [NSParagraphStyle kk_styleWithCTStyle:(__bridge CTParagraphStyleRef)(value)]; \
                       } \
                       if (value. _attr_ == _attr_) return; \
-                      if ([value isKindOfClass:[NSMutableParagraphStyle class]]) { \
-                          style = (id)value; \
-                      } else { \
-                          style = value.mutableCopy; \
-                      } \
+                      style = value.mutableCopy; \
                   } else { \
                       if ([NSParagraphStyle defaultParagraphStyle]. _attr_ == _attr_) return; \
                       style = [NSParagraphStyle defaultParagraphStyle].mutableCopy; \
                   } \
                   style. _attr_ = _attr_; \
-                  [self kk_setParagraphStyle:style range:subRange]; \
+                  [self kk_setParagraphStyle:style.copy range:subRange]; \
               }];
 
 - (void)kk_setAlignment:(NSTextAlignment)alignment range:(NSRange)range {
