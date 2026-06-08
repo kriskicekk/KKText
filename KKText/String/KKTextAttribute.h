@@ -81,6 +81,10 @@ typedef NS_ENUM (NSUInteger, KKTextTruncationType) {
     
     /// Truncate in the middle of the line, leaving both the start and the end portions visible.
     KKTextTruncationTypeMiddle = 3,
+
+    /// Clip overflowing text at the container's edge without adding a truncation token.
+    /// For multi-line layout, overflow text is laid out as a continuation of the last visible line.
+    KKTextTruncationTypeClip = 4,
 };
 
 

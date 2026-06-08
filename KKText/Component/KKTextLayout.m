@@ -391,6 +391,11 @@ dispatch_semaphore_signal(_lock);
     BOOL constraintSizeIsExtended = NO;
     CGRect constraintRectBeforeExtended = {0};
     
+    // For clipping, keep the first overflow line and place it after the last visible
+    // line. The drawing context clips it at the container edge, matching UILabel's
+    // NSLineBreakByClipping behavior without a truncation token.
+    KKTextLine *continuationLine = nil;
+
     text = text.mutableCopy;
     container = container.copy;
     if (!text || !container) return nil;
@@ -534,11 +539,21 @@ dispatch_semaphore_signal(_lock);
             if (isVerticalForm) {
                 if (rect.origin.x + rect.size.width >
                     constraintRectBeforeExtended.origin.x +
-                    constraintRectBeforeExtended.size.width) break;
+                    constraintRectBeforeExtended.size.width) {
+                    if (container.truncationType == KKTextTruncationTypeClip) {
+                        continuationLine = line;
+                    }
+                    break;
+                }
             } else {
                 if (rect.origin.y + rect.size.height >
                     constraintRectBeforeExtended.origin.y +
-                    constraintRectBeforeExtended.size.height) break;
+                    constraintRectBeforeExtended.size.height) {
+                    if (container.truncationType == KKTextTruncationTypeClip) {
+                        continuationLine = line;
+                    }
+                    break;
+                }
             }
         }
         
@@ -586,6 +601,7 @@ dispatch_semaphore_signal(_lock);
                     KKTextLine *line = lines.lastObject;
                     if (!line) break;
                     if (line.row < rowCount) break;
+                    if (container.truncationType == KKTextTruncationTypeClip) continuationLine = line;
                     [lines removeLastObject];
                 } while (1);
             }
@@ -595,6 +611,22 @@ dispatch_semaphore_signal(_lock);
             needTruncation = YES;
         }
         
+        if (needTruncation && continuationLine) {
+            CGPoint position;
+            if (isVerticalForm) {
+                position.x = lastLine.position.x;
+                position.y = lastLine.position.y + lastLine.lineWidth;
+            } else {
+                position.x = lastLine.position.x + lastLine.lineWidth;
+                position.y = lastLine.position.y;
+            }
+            KKTextLine *line = [KKTextLine lineWithCTLine:continuationLine.CTLine position:position vertical:isVerticalForm];
+            line.row = lastLine.row;
+            line.index = lastLine.index + 1;
+            [lines addObject:line];
+            textBoundingRect = CGRectUnion(textBoundingRect, line.bounds);
+        }
+
         // Give user a chance to modify the line's position.
         if (container.linePositionModifier) {
             [container.linePositionModifier modifyLines:lines fromText:text inContainer:container];
@@ -680,7 +712,7 @@ dispatch_semaphore_signal(_lock);
         visibleRange.length = lastRange.location + lastRange.length - visibleRange.location;
         
         // create truncated line
-        if (container.truncationType != KKTextTruncationTypeNone) {
+        if (container.truncationType != KKTextTruncationTypeNone && container.truncationType != KKTextTruncationTypeClip) {
             CTLineRef truncationTokenLine = NULL;
             if (container.truncationToken) {
                 truncationToken = container.truncationToken;

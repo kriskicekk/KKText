@@ -98,6 +98,7 @@ extern const CGSize KKTextContainerMaxSize;
 @property KKTextTruncationType truncationType;
 
 /// The truncation token. If nil, the layout will use "…" instead. Default is nil.
+/// Ignored when truncationType is KKTextTruncationTypeClip.
 @property (nullable, copy) NSAttributedString *truncationToken;
 
 /// This modifier is applied to the lines before the layout is completed,

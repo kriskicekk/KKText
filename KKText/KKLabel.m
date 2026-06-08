@@ -318,6 +318,9 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
 - (void)_updateOuterLineBreakMode {
     if (_innerContainer.truncationType) {
         switch (_innerContainer.truncationType) {
+            case KKTextTruncationTypeClip: {
+                _lineBreakMode = NSLineBreakByClipping;
+            } break;
             case KKTextTruncationTypeStart: {
                 _lineBreakMode = NSLineBreakByTruncatingHead;
             } break;
@@ -402,6 +405,51 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
     _fadeOnHighlight = YES;
     
     self.isAccessibilityElement = YES;
+}
+
+- (void)_applyLineBreakMode:(NSLineBreakMode)lineBreakMode {
+    [self _applyLineBreakModeToInnerText:lineBreakMode];
+    [self _applyLineBreakModeToInnerContainer:lineBreakMode];
+}
+
+- (void)_applyLineBreakModeToInnerText:(NSLineBreakMode)lineBreakMode {
+    switch (lineBreakMode) {
+        case NSLineBreakByWordWrapping:
+        case NSLineBreakByCharWrapping: {
+            _innerText.kk_lineBreakMode = lineBreakMode;
+        } break;
+        // Use word wrapping to let CoreText produce the overflow segment; the container's
+        // clip truncation type handles clipping at draw time.
+        case NSLineBreakByClipping:
+        case NSLineBreakByTruncatingHead:
+        case NSLineBreakByTruncatingTail:
+        case NSLineBreakByTruncatingMiddle: {
+            _innerText.kk_lineBreakMode = NSLineBreakByWordWrapping;
+        } break;
+        default: break;
+    }
+}
+
+- (void)_applyLineBreakModeToInnerContainer:(NSLineBreakMode)lineBreakMode {
+    switch (lineBreakMode) {
+        case NSLineBreakByWordWrapping:
+        case NSLineBreakByCharWrapping: {
+            _innerContainer.truncationType = KKTextTruncationTypeNone;
+        } break;
+        case NSLineBreakByClipping: {
+            _innerContainer.truncationType = KKTextTruncationTypeClip;
+        } break;
+        case NSLineBreakByTruncatingHead: {
+            _innerContainer.truncationType = KKTextTruncationTypeStart;
+        } break;
+        case NSLineBreakByTruncatingTail: {
+            _innerContainer.truncationType = KKTextTruncationTypeEnd;
+        } break;
+        case NSLineBreakByTruncatingMiddle: {
+            _innerContainer.truncationType = KKTextTruncationTypeMiddle;
+        } break;
+        default: break;
+    }
 }
 
 #pragma mark - Override
@@ -647,19 +695,7 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
         _innerText.kk_color = _textColor;
         _innerText.kk_shadow = [self _shadowFromProperties];
         _innerText.kk_alignment = _textAlignment;
-        switch (_lineBreakMode) {
-            case NSLineBreakByWordWrapping:
-            case NSLineBreakByCharWrapping:
-            case NSLineBreakByClipping: {
-                _innerText.kk_lineBreakMode = _lineBreakMode;
-            } break;
-            case NSLineBreakByTruncatingHead:
-            case NSLineBreakByTruncatingTail:
-            case NSLineBreakByTruncatingMiddle: {
-                _innerText.kk_lineBreakMode = NSLineBreakByWordWrapping;
-            } break;
-            default: break;
-        }
+        [self _applyLineBreakMode:_lineBreakMode];
     }
     if ([_textParser parseText:_innerText selectedRange:NULL]) {
         [self _updateOuterTextProperties];
@@ -773,28 +809,8 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
 - (void)setLineBreakMode:(NSLineBreakMode)lineBreakMode {
     if (_lineBreakMode == lineBreakMode) return;
     _lineBreakMode = lineBreakMode;
-    _innerText.kk_lineBreakMode = lineBreakMode;
-    // allow multi-line break
-    switch (lineBreakMode) {
-        case NSLineBreakByWordWrapping:
-        case NSLineBreakByCharWrapping:
-        case NSLineBreakByClipping: {
-            _innerContainer.truncationType = KKTextTruncationTypeNone;
-            _innerText.kk_lineBreakMode = lineBreakMode;
-        } break;
-        case NSLineBreakByTruncatingHead:{
-            _innerContainer.truncationType = KKTextTruncationTypeStart;
-            _innerText.kk_lineBreakMode = NSLineBreakByWordWrapping;
-        } break;
-        case NSLineBreakByTruncatingTail:{
-            _innerContainer.truncationType = KKTextTruncationTypeEnd;
-            _innerText.kk_lineBreakMode = NSLineBreakByWordWrapping;
-        } break;
-        case NSLineBreakByTruncatingMiddle: {
-            _innerContainer.truncationType = KKTextTruncationTypeMiddle;
-            _innerText.kk_lineBreakMode = NSLineBreakByWordWrapping;
-        } break;
-        default: break;
+    if (_innerText.length) {
+        [self _applyLineBreakMode:lineBreakMode];
     }
     if (_innerText.length && !_ignoreCommonProperties) {
         if (_displaysAsynchronously && _clearContentsBeforeAsynchronouslyDisplay) {
@@ -850,19 +866,8 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
 - (void)setAttributedText:(NSAttributedString *)attributedText {
     if (attributedText.length > 0) {
         _innerText = attributedText.mutableCopy;
-        switch (_lineBreakMode) {
-            case NSLineBreakByWordWrapping:
-            case NSLineBreakByCharWrapping:
-            case NSLineBreakByClipping: {
-                _innerText.kk_lineBreakMode = _lineBreakMode;
-            } break;
-            case NSLineBreakByTruncatingHead:
-            case NSLineBreakByTruncatingTail:
-            case NSLineBreakByTruncatingMiddle: {
-                _innerText.kk_lineBreakMode = NSLineBreakByWordWrapping;
-            } break;
-            default: break;
-        }
+        NSLineBreakMode lineBreakMode = _innerText.kk_lineBreakMode;
+        [self _applyLineBreakMode:lineBreakMode];
     } else {
         _innerText = [NSMutableAttributedString new];
     }
