@@ -757,18 +757,9 @@ dispatch_semaphore_signal(_lock);
                     type = kCTLineTruncationMiddle;
                 }
                 NSMutableAttributedString *lastLineText = [text attributedSubstringFromRange:lastLine.range].mutableCopy;
-                [lastLineText appendAttributedString:truncationToken];
                 CTLineRef ctLastLineExtend = CTLineCreateWithAttributedString((CFAttributedStringRef)lastLineText);
                 if (ctLastLineExtend) {
-                    CGFloat truncatedWidth = lastLine.width;
-                    CGRect cgPathRect = CGRectZero;
-                    if (CGPathIsRect(cgPath, &cgPathRect)) {
-                        if (isVerticalForm) {
-                            truncatedWidth = cgPathRect.size.height;
-                        } else {
-                            truncatedWidth = cgPathRect.size.width;
-                        }
-                    }
+                    CGFloat truncatedWidth = floorf(lastLine.lineWidth);
                     CTLineRef ctTruncatedLine = CTLineCreateTruncatedLine(ctLastLineExtend, truncatedWidth, type, truncationTokenLine);
                     CFRelease(ctLastLineExtend);
                     if (ctTruncatedLine) {
