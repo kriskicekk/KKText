@@ -18,10 +18,22 @@
 
 const CGSize KKTextContainerMaxSize = (CGSize){0x100000, 0x100000};
 
+static NSString *const KKTextTruncationSourceAttributeName = @"KKTextTruncationSourceAttributeName";
+static NSString *const KKTextTruncationSourceRangeAttributeName = @"KKTextTruncationSourceRangeAttributeName";
+
 typedef struct {
     CGFloat head;
     CGFloat foot;
 } KKRowEdge;
+
+// Internal marker used only while building a truncated line.
+// CoreText keeps attributed-string attributes on CTRun objects, so the vertical
+// drawing pass can tell whether a run comes from the original last line or from
+// the truncation token.
+typedef NS_ENUM(NSUInteger, KKTextTruncationSource) {
+    KKTextTruncationSourceLastLine = 1,
+    KKTextTruncationSourceToken = 2,
+};
 
 static inline CGSize KKTextClipCGSize(CGSize size) {
     if (size.width > KKTextContainerMaxSize.width) size.width = KKTextContainerMaxSize.width;
@@ -54,6 +66,19 @@ static CGColorRef KKTextGetCGColor(CGColorRef color) {
     }
     return color;
 }
+
+static void KKTextMarkTruncationSource(NSMutableAttributedString *text, KKTextTruncationSource source) {
+    if (text.length == 0) return;
+    // Mark by composed character sequence, not by UTF-16 unit, so emoji and
+    // combining characters stay as one visible character for later lookup.
+    [text.string enumerateSubstringsInRange:NSMakeRange(0, text.length)
+                                    options:NSStringEnumerationByComposedCharacterSequences
+                                 usingBlock:^(NSString *substring, NSRange substringRange, NSRange enclosingRange, BOOL *stop) {
+        [text addAttribute:KKTextTruncationSourceAttributeName value:@(source) range:substringRange];
+        [text addAttribute:KKTextTruncationSourceRangeAttributeName value:[NSValue valueWithRange:substringRange] range:substringRange];
+    }];
+}
+
 
 @implementation KKTextLinePositionSimpleModifier
 - (void)modifyLines:(NSArray *)lines fromText:(NSAttributedString *)text inContainer:(KKTextContainer *)container {
@@ -383,6 +408,7 @@ dispatch_semaphore_signal(_lock);
     NSMutableSet *attachmentContentsSet = nil;
     BOOL needTruncation = NO;
     NSAttributedString *truncationToken = nil;
+    NSAttributedString *truncatedLineText = nil;
     KKTextLine *truncatedLine = nil;
     KKRowEdge *lineRowsEdge = NULL;
     NSUInteger *lineRowsIndex = NULL;
@@ -714,9 +740,9 @@ dispatch_semaphore_signal(_lock);
         // create truncated line
         if (container.truncationType != KKTextTruncationTypeNone && container.truncationType != KKTextTruncationTypeClip) {
             CTLineRef truncationTokenLine = NULL;
+            NSMutableAttributedString *tokenText = nil;
             if (container.truncationToken) {
-                truncationToken = container.truncationToken;
-                truncationTokenLine = CTLineCreateWithAttributedString((CFAttributedStringRef)truncationToken);
+                tokenText = container.truncationToken.mutableCopy;
             } else {
                 CFArrayRef runs = CTLineGetGlyphRuns(lastLine.CTLine);
                 NSUInteger runCount = CFArrayGetCount(runs);
@@ -746,9 +772,15 @@ dispatch_semaphore_signal(_lock);
                     }
                     if (!attrs) attrs = [NSMutableDictionary new];
                 }
-                truncationToken = [[NSAttributedString alloc] initWithString:KKTextTruncationToken attributes:attrs];
-                truncationTokenLine = CTLineCreateWithAttributedString((CFAttributedStringRef)truncationToken);
+                tokenText = [[NSMutableAttributedString alloc] initWithString:KKTextTruncationToken attributes:attrs];
             }
+
+            // Mark token text before creating CTLine. After CTLineCreateTruncatedLine(),
+            // token runs may still report source-string indices, but these custom
+            // attributes remain available from CTRunGetAttributes().
+            KKTextMarkTruncationSource(tokenText, KKTextTruncationSourceToken);
+            truncationToken = tokenText;
+            truncationTokenLine = CTLineCreateWithAttributedString((CFAttributedStringRef)truncationToken);
             if (truncationTokenLine) {
                 CTLineTruncationType type = kCTLineTruncationEnd;
                 if (container.truncationType == KKTextTruncationTypeStart) {
@@ -757,10 +789,27 @@ dispatch_semaphore_signal(_lock);
                     type = kCTLineTruncationMiddle;
                 }
                 NSMutableAttributedString *lastLineText = [text attributedSubstringFromRange:lastLine.range].mutableCopy;
+                // Mark the visible last-line text separately from the token, then let
+                // CoreText merge both parts when it creates the truncated CTLine.
+                KKTextMarkTruncationSource(lastLineText, KKTextTruncationSourceLastLine);
+                truncatedLineText = lastLineText;
                 CTLineRef ctLastLineExtend = CTLineCreateWithAttributedString((CFAttributedStringRef)lastLineText);
                 if (ctLastLineExtend) {
-                    CGFloat truncatedWidth = floorf(lastLine.lineWidth);
-                    CTLineRef ctTruncatedLine = CTLineCreateTruncatedLine(ctLastLineExtend, truncatedWidth, type, truncationTokenLine);
+                    // CTLineCreateTruncatedLine() uses the width along the line's
+                    // baseline. In vertical form, that available length maps to the
+                    // container/path height.
+                    CGFloat truncatedWidth = CTLineGetTypographicBounds(ctLastLineExtend, NULL, NULL, NULL);
+                    CGRect cgPathRect = CGRectZero;
+                    if (CGPathIsRect(cgPath, &cgPathRect)) {
+                        if (isVerticalForm) {
+                            truncatedWidth = MIN(cgPathRect.size.height, truncatedWidth);
+                        } else {
+                            truncatedWidth = MIN(cgPathRect.size.width, truncatedWidth);
+                        }
+                    }
+                    // CoreText may fail to create a truncated line with the exact line width.
+                    // Reduce the width slightly to force the truncation token. This should be a CoreText bug.
+                    CTLineRef ctTruncatedLine = CTLineCreateTruncatedLine(ctLastLineExtend, MAX(truncatedWidth - 5, 0), type, truncationTokenLine);
                     CFRelease(ctLastLineExtend);
                     if (ctTruncatedLine) {
                         truncatedLine = [KKTextLine lineWithCTLine:ctTruncatedLine position:lastLine.position vertical:isVerticalForm];
@@ -785,6 +834,8 @@ dispatch_semaphore_signal(_lock);
             if (runCount == 0) return;
             NSMutableArray *lineRunRanges = [NSMutableArray new];
             line.verticalRotateRange = lineRunRanges;
+            BOOL isTruncatedLine = (line == truncatedLine);
+
             for (NSUInteger r = 0; r < runCount; r++) {
                 CTRunRef run = CFArrayGetValueAtIndex(runs, r);
                 NSMutableArray *runRanges = [NSMutableArray new];
@@ -792,45 +843,78 @@ dispatch_semaphore_signal(_lock);
                 NSUInteger glyphCount = CTRunGetGlyphCount(run);
                 if (glyphCount == 0) continue;
                 
-                CFIndex runStrIdx[glyphCount + 1];
-                CTRunGetStringIndices(run, CFRangeMake(0, 0), runStrIdx);
-                CFRange runStrRange = CTRunGetStringRange(run);
-                runStrIdx[glyphCount] = runStrRange.location + runStrRange.length;
                 CFDictionaryRef runAttrs = CTRunGetAttributes(run);
+                NSDictionary *runAttrsDict = (__bridge NSDictionary *)runAttrs;
                 CTFontRef font = CFDictionaryGetValue(runAttrs, kCTFontAttributeName);
                 BOOL isColorGlyph = KKTextCTFontContainsColorBitmapGlyphs(font);
                 
-                NSUInteger prevIdx = 0;
-                KKTextRunGlyphDrawMode prevMode = KKTextRunGlyphDrawModeHorizontal;
-                NSString *layoutStr = layout.text.string;
-                for (NSUInteger g = 0; g < glyphCount; g++) {
-                    BOOL glyphRotate = 0, glyphRotateMove = NO;
-                    CFIndex runStrLen = runStrIdx[g + 1] - runStrIdx[g];
-                    if (isColorGlyph) {
-                        glyphRotate = YES;
-                    } else if (runStrLen == 1) {
-                        unichar c = [layoutStr characterAtIndex:runStrIdx[g]];
-                        glyphRotate = [rotateCharset characterIsMember:c];
-                        if (glyphRotate) glyphRotateMove = [rotateMoveCharset characterIsMember:c];
-                    } else if (runStrLen > 1){
-                        NSString *glyphStr = [layoutStr substringWithRange:NSMakeRange(runStrIdx[g], runStrLen)];
-                        BOOL glyphRotate = [glyphStr rangeOfCharacterFromSet:rotateCharset].location != NSNotFound;
+                if (isTruncatedLine) {
+                    // For a CoreText truncated line, CTRun string indices are not
+                    // reliable for identifying token characters. Use the preserved
+                    // source/range marker to recover the real character first, then
+                    // decide whether this run should rotate in vertical form.
+                    NSNumber *truncationSource = runAttrsDict[KKTextTruncationSourceAttributeName];
+                    NSValue *truncationSourceRangeValue = runAttrsDict[KKTextTruncationSourceRangeAttributeName];
+                    if (!(truncationSource && truncationSourceRangeValue)) continue;
+                    NSString *sourceString = nil;
+                    if (truncationSource.unsignedIntegerValue == KKTextTruncationSourceLastLine) {
+                        sourceString = truncatedLineText.string;
+                    } else if (truncationSource.unsignedIntegerValue == KKTextTruncationSourceToken) {
+                        sourceString = truncationToken.string;
+                    }
+                    NSRange sourceRange = truncationSourceRangeValue.rangeValue;
+                    if (!sourceString || sourceRange.location == NSNotFound || NSMaxRange(sourceRange) > sourceString.length) continue;
+                    
+                    NSString *glyphStr = [sourceString substringWithRange:sourceRange];
+                    BOOL glyphRotate = isColorGlyph;
+                    BOOL glyphRotateMove = NO;
+                    if (!glyphRotate) {
+                        glyphRotate = [glyphStr rangeOfCharacterFromSet:rotateCharset].location != NSNotFound;
                         if (glyphRotate) glyphRotateMove = [glyphStr rangeOfCharacterFromSet:rotateMoveCharset].location != NSNotFound;
                     }
-                    
+                    // The marker range is attached per composed character. Once CoreText
+                    // groups that character into this run, every glyph in the run should
+                    // use the same vertical draw mode.
                     KKTextRunGlyphDrawMode mode = glyphRotateMove ? KKTextRunGlyphDrawModeVerticalRotateMove : (glyphRotate ? KKTextRunGlyphDrawModeVerticalRotate : KKTextRunGlyphDrawModeHorizontal);
-                    if (g == 0) {
-                        prevMode = mode;
-                    } else if (mode != prevMode) {
-                        KKTextRunGlyphRange *aRange = [KKTextRunGlyphRange rangeWithRange:NSMakeRange(prevIdx, g - prevIdx) drawMode:prevMode];
-                        [runRanges addObject:aRange];
-                        prevIdx = g;
-                        prevMode = mode;
-                    }
-                }
-                if (prevIdx < glyphCount) {
-                    KKTextRunGlyphRange *aRange = [KKTextRunGlyphRange rangeWithRange:NSMakeRange(prevIdx, glyphCount - prevIdx) drawMode:prevMode];
+                    KKTextRunGlyphRange *aRange = [KKTextRunGlyphRange rangeWithRange:NSMakeRange(0, glyphCount) drawMode:mode];
                     [runRanges addObject:aRange];
+                } else {
+                    NSUInteger prevIdx = 0;
+                    KKTextRunGlyphDrawMode prevMode = KKTextRunGlyphDrawModeHorizontal;
+                    NSString *layoutStr = layout.text.string;
+                    CFIndex runStrIdx[glyphCount + 1];
+                    CTRunGetStringIndices(run, CFRangeMake(0, 0), runStrIdx);
+                    CFRange runStrRange = CTRunGetStringRange(run);
+                    runStrIdx[glyphCount] = runStrRange.location + runStrRange.length;
+                    for (NSUInteger g = 0; g < glyphCount; g++) {
+                        BOOL glyphRotate = 0, glyphRotateMove = NO;
+                        CFIndex runStrLen = runStrIdx[g + 1] - runStrIdx[g];
+                        if (isColorGlyph) {
+                            glyphRotate = YES;
+                        } else if (runStrLen == 1) {
+                            unichar c = [layoutStr characterAtIndex:runStrIdx[g]];
+                            glyphRotate = [rotateCharset characterIsMember:c];
+                            if (glyphRotate) glyphRotateMove = [rotateMoveCharset characterIsMember:c];
+                        } else if (runStrLen > 1){
+                            NSString *glyphStr = [layoutStr substringWithRange:NSMakeRange(runStrIdx[g], runStrLen)];
+                            BOOL glyphRotate = [glyphStr rangeOfCharacterFromSet:rotateCharset].location != NSNotFound;
+                            if (glyphRotate) glyphRotateMove = [glyphStr rangeOfCharacterFromSet:rotateMoveCharset].location != NSNotFound;
+                        }
+
+                        KKTextRunGlyphDrawMode mode = glyphRotateMove ? KKTextRunGlyphDrawModeVerticalRotateMove : (glyphRotate ? KKTextRunGlyphDrawModeVerticalRotate : KKTextRunGlyphDrawModeHorizontal);
+                        if (g == 0) {
+                            prevMode = mode;
+                        } else if (mode != prevMode) {
+                            KKTextRunGlyphRange *aRange = [KKTextRunGlyphRange rangeWithRange:NSMakeRange(prevIdx, g - prevIdx) drawMode:prevMode];
+                            [runRanges addObject:aRange];
+                            prevIdx = g;
+                            prevMode = mode;
+                        }
+                    }
+                    if (prevIdx < glyphCount) {
+                        KKTextRunGlyphRange *aRange = [KKTextRunGlyphRange rangeWithRange:NSMakeRange(prevIdx, glyphCount - prevIdx) drawMode:prevMode];
+                        [runRanges addObject:aRange];
+                    }
                 }
                 
             }
