@@ -195,6 +195,16 @@ label.attributedText = text;
 
 KKText uses `KKTextPlatform.h` to map common UIKit names to AppKit types on macOS. This keeps most attributed string and label drawing APIs close to the iOS version.
 
+### KKLabel macOS Demo
+
+Horizontal layout demo:
+
+![KKLabel macOS horizontal demo](Documentation/Images/kklabel_macos_horizontal_demo.png)
+
+Vertical layout demo:
+
+![KKLabel macOS vertical demo](Documentation/Images/kklabel_macos_vertical_demo.png)
+
 Some editing-related UIKit features, such as keyboard management, pasteboard handling, magnifier behavior, and selection UI, are platform-specific. They are kept on iOS unless a macOS implementation is added.
 
 ## License
