@@ -2299,6 +2299,16 @@ static inline void KKTextApplyCoreTextDrawTransform(CGContextRef context, CGSize
 #endif
 }
 
+static inline void KKTextApplyLayoutDrawTransform(CGContextRef context, CGSize size) {
+#if KKTEXT_UIKIT
+    (void)context;
+    (void)size;
+#else
+    CGContextTranslateCTM(context, 0, size.height);
+    CGContextScaleCTM(context, 1, -1);
+#endif
+}
+
 static inline CGFloat KKTextCoreTextDrawY(CGSize size, CGFloat y) {
     // `KKTextLine.position` is stored in top-left layout coordinates on both
     // platforms, while CoreText text positions use a y-up drawing coordinate.
@@ -2320,15 +2330,11 @@ static inline CGFloat KKTextCoreTextDrawRotatedGlyphX(CGSize size, CGFloat lineY
 }
 
 static inline void KKTextDrawCGImageInRect(CGContextRef context, CGImageRef image, CGRect rect) {
-#if KKTEXT_UIKIT
     CGContextSaveGState(context);
     CGContextTranslateCTM(context, 0, CGRectGetMaxY(rect) + CGRectGetMinY(rect));
     CGContextScaleCTM(context, 1, -1);
     CGContextDrawImage(context, rect, image);
     CGContextRestoreGState(context);
-#else
-    CGContextDrawImage(context, rect, image);
-#endif
 }
 
 static CGRect KKTextMergeRectInSameLine(CGRect rect1, CGRect rect2, BOOL isVertical) {
@@ -2778,6 +2784,7 @@ static void KKTextDrawText(KKTextLayout *layout, CGContextRef context, CGSize si
 
 static void KKTextDrawBlockBorder(KKTextLayout *layout, CGContextRef context, CGSize size, CGPoint point, BOOL (^cancel)(void)) {
     CGContextSaveGState(context);
+    KKTextApplyLayoutDrawTransform(context, size);
     CGContextTranslateCTM(context, point.x, point.y);
     
     BOOL isVertical = layout.container.verticalForm;
@@ -2851,6 +2858,7 @@ static void KKTextDrawBlockBorder(KKTextLayout *layout, CGContextRef context, CG
 
 static void KKTextDrawBorder(KKTextLayout *layout, CGContextRef context, CGSize size, CGPoint point, KKTextBorderType type, BOOL (^cancel)(void)) {
     CGContextSaveGState(context);
+    KKTextApplyLayoutDrawTransform(context, size);
     CGContextTranslateCTM(context, point.x, point.y);
     
     BOOL isVertical = layout.container.verticalForm;
@@ -2983,6 +2991,7 @@ static void KKTextDrawDecoration(KKTextLayout *layout, CGContextRef context, CGS
     NSArray *lines = layout.lines;
     
     CGContextSaveGState(context);
+    KKTextApplyLayoutDrawTransform(context, size);
     CGContextTranslateCTM(context, point.x, point.y);
     
     BOOL isVertical = layout.container.verticalForm;
@@ -3146,7 +3155,10 @@ static void KKTextDrawAttachment(KKTextLayout *layout, CGContextRef context, CGS
         if (image) {
             CGImageRef ref = image.CGImage;
             if (ref) {
+                CGContextSaveGState(context);
+                KKTextApplyLayoutDrawTransform(context, size);
                 KKTextDrawCGImageInRect(context, ref, rect);
+                CGContextRestoreGState(context);
             }
         } else if (view) {
             view.frame = rect;
@@ -3282,6 +3294,7 @@ static void KKTextDrawInnerShadow(KKTextLayout *layout, CGContextRef context, CG
 static void KKTextDrawDebug(KKTextLayout *layout, CGContextRef context, CGSize size, CGPoint point, KKTextDebugOption *op) {
     KKTextPlatformPushContext(context);
     CGContextSaveGState(context);
+    KKTextApplyLayoutDrawTransform(context, size);
     CGContextTranslateCTM(context, point.x, point.y);
     CGContextSetLineWidth(context, 1.0 / KKTextScreenScale());
     CGContextSetLineDash(context, 0, NULL, 0);
