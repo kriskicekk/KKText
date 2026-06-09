@@ -409,7 +409,7 @@ KKTextAttributeType KKTextAttributeGetType(NSString *name){
 - (void)encodeWithCoder:(NSCoder *)aCoder {
     NSData *data = nil;
     @try {
-        data = [KKTextArchiver archivedDataWithRootObject:self.attributes];
+        data = [KKTextArchiver kk_archivedDataWithRootObject:self.attributes];
     }
     @catch (NSException *exception) {
         NSLog(@"%@",exception);
@@ -421,7 +421,7 @@ KKTextAttributeType KKTextAttributeGetType(NSString *name){
     self = [super init];
     NSData *data = [aDecoder decodeObjectForKey:@"attributes"];
     @try {
-        _attributes = [KKTextUnarchiver unarchiveObjectWithData:data];
+        _attributes = [KKTextUnarchiver kk_unarchiveObjectWithData:data];
     }
     @catch (NSException *exception) {
         NSLog(@"%@",exception);

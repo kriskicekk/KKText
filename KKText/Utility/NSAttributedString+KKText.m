@@ -59,7 +59,7 @@ static double _KKDeviceSystemVersion(void) {
 - (NSData *)kk_archiveToData {
     NSData *data = nil;
     @try {
-        data = [KKTextArchiver archivedDataWithRootObject:self];
+        data = [KKTextArchiver kk_archivedDataWithRootObject:self];
     }
     @catch (NSException *exception) {
         NSLog(@"%@",exception);
@@ -70,7 +70,7 @@ static double _KKDeviceSystemVersion(void) {
 + (instancetype)kk_unarchiveFromData:(NSData *)data {
     NSAttributedString *one = nil;
     @try {
-        one = [KKTextUnarchiver unarchiveObjectWithData:data];
+        one = [KKTextUnarchiver kk_unarchiveObjectWithData:data];
     }
     @catch (NSException *exception) {
         NSLog(@"%@",exception);

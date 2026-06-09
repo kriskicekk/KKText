@@ -1050,7 +1050,7 @@ fail:
 
 
 - (void)encodeWithCoder:(NSCoder *)aCoder {
-    NSData *textData = [KKTextArchiver archivedDataWithRootObject:_text];
+    NSData *textData = [KKTextArchiver kk_archivedDataWithRootObject:_text];
     [aCoder encodeObject:textData forKey:@"text"];
     [aCoder encodeObject:_container forKey:@"container"];
     [aCoder encodeObject:[NSValue valueWithRange:_range] forKey:@"range"];
@@ -1058,7 +1058,7 @@ fail:
 
 - (id)initWithCoder:(NSCoder *)aDecoder {
     NSData *textData = [aDecoder decodeObjectForKey:@"text"];
-    NSAttributedString *text = [KKTextUnarchiver unarchiveObjectWithData:textData];
+    NSAttributedString *text = [KKTextUnarchiver kk_unarchiveObjectWithData:textData];
     KKTextContainer *container = [aDecoder decodeObjectForKey:@"container"];
     NSRange range = ((NSValue *)[aDecoder decodeObjectForKey:@"range"]).rangeValue;
     self = [self.class layoutWithContainer:container text:text range:range];

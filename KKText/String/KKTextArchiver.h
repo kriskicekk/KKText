@@ -21,6 +21,14 @@ NS_ASSUME_NONNULL_BEGIN
  CGColor/CGImage/CTRunDelegateRef/.. (such as NSAttributedString).
  */
 @interface KKTextArchiver : NSKeyedArchiver <NSKeyedArchiverDelegate>
+
+/**
+ Archives a root object with KKText's delegate conversion for Core Text and
+ Core Graphics bridge objects.
+ */
++ (nullable NSData *)kk_archivedDataWithRootObject:(id)rootObject;
++ (BOOL)kk_archiveRootObject:(id)rootObject toFile:(NSString *)path;
+
 @end
 
 /**
@@ -29,6 +37,14 @@ NS_ASSUME_NONNULL_BEGIN
  `KKTextArchiver` or `NSKeyedArchiver`.
  */
 @interface KKTextUnarchiver : NSKeyedUnarchiver <NSKeyedUnarchiverDelegate>
+
+/**
+ Unarchives data produced by `KKTextArchiver` while restoring Core Text and
+ Core Graphics bridge objects.
+ */
++ (nullable id)kk_unarchiveObjectWithData:(NSData *)data;
++ (nullable id)kk_unarchiveObjectWithFile:(NSString *)path;
+
 @end
 
 NS_ASSUME_NONNULL_END

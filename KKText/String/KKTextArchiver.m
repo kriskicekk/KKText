@@ -148,32 +148,31 @@ static CFTypeID CTRubyAnnotationTypeID(void) {
 @end
 
 
+@interface KKTextArchiver ()
+- (instancetype)_initForKKTextArchiving;
+@end
+
 @implementation KKTextArchiver
 
-+ (NSData *)archivedDataWithRootObject:(id)rootObject {
++ (NSData *)kk_archivedDataWithRootObject:(id)rootObject {
     if (!rootObject) return nil;
-    NSMutableData *data = [NSMutableData data];
-    KKTextArchiver *archiver = [[[self class] alloc] initForWritingWithMutableData:data];
-    [archiver encodeRootObject:rootObject];
+    KKTextArchiver *archiver = [[[self class] alloc] _initForKKTextArchiving];
+    [archiver encodeObject:rootObject forKey:NSKeyedArchiveRootObjectKey];
     [archiver finishEncoding];
-    return data;
+    return archiver.encodedData;
 }
 
-+ (BOOL)archiveRootObject:(id)rootObject toFile:(NSString *)path {
-    NSData *data = [self archivedDataWithRootObject:rootObject];
++ (BOOL)kk_archiveRootObject:(id)rootObject toFile:(NSString *)path {
+    NSData *data = [self kk_archivedDataWithRootObject:rootObject];
     if (!data) return NO;
     return [data writeToFile:path atomically:YES];
 }
 
-- (instancetype)init {
-    self = [super init];
-    self.delegate = self;
-    return self;
-}
-
-- (instancetype)initForWritingWithMutableData:(NSMutableData *)data {
-    self = [super initForWritingWithMutableData:data];
-    self.delegate = self;
+- (instancetype)_initForKKTextArchiving {
+    self = [super initRequiringSecureCoding:NO];
+    if (self) {
+        self.delegate = self;
+    }
     return self;
 }
 
@@ -198,28 +197,33 @@ static CFTypeID CTRubyAnnotationTypeID(void) {
 @end
 
 
+@interface KKTextUnarchiver ()
+- (instancetype)_initForKKTextUnarchivingFromData:(NSData *)data error:(NSError **)error;
+@end
+
 @implementation KKTextUnarchiver
 
-+ (id)unarchiveObjectWithData:(NSData *)data {
++ (id)kk_unarchiveObjectWithData:(NSData *)data {
     if (data.length == 0) return nil;
-    KKTextUnarchiver *unarchiver = [[self alloc] initForReadingWithData:data];
-    return [unarchiver decodeObject];
+    NSError *error = nil;
+    KKTextUnarchiver *unarchiver = [[self alloc] _initForKKTextUnarchivingFromData:data error:&error];
+    if (!unarchiver) return nil;
+    id object = [unarchiver decodeObjectForKey:NSKeyedArchiveRootObjectKey];
+    [unarchiver finishDecoding];
+    return object;
 }
 
-+ (id)unarchiveObjectWithFile:(NSString *)path {
++ (id)kk_unarchiveObjectWithFile:(NSString *)path {
     NSData *data = [NSData dataWithContentsOfFile:path];
-    return [self unarchiveObjectWithData:data];
+    return [self kk_unarchiveObjectWithData:data];
 }
 
-- (instancetype)init {
-    self = [super init];
-    self.delegate = self;
-    return self;
-}
-
-- (instancetype)initForReadingWithData:(NSData *)data {
-    self = [super initForReadingWithData:data];
-    self.delegate = self;
+- (instancetype)_initForKKTextUnarchivingFromData:(NSData *)data error:(NSError **)error {
+    self = [super initForReadingFromData:data error:error];
+    if (self) {
+        self.requiresSecureCoding = NO;
+        self.delegate = self;
+    }
     return self;
 }
 
