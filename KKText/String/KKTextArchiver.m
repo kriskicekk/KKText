@@ -20,7 +20,7 @@
  
  Here's a workaround for this issue.
  */
-static CFTypeID CTRunDelegateTypeID() {
+static CFTypeID CTRunDelegateTypeID(void) {
     static CFTypeID typeID;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -37,7 +37,7 @@ static CFTypeID CTRunDelegateTypeID() {
     return typeID;
 }
 
-static CFTypeID CTRubyAnnotationTypeID() {
+static CFTypeID CTRubyAnnotationTypeID(void) {
     static CFTypeID typeID;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{

@@ -31,7 +31,7 @@ void _sharedDebugSetFunction(const void *value, void *context) {
     [target setDebugOption:_sharedDebugOption];
 }
 
-static void _initSharedDebug() {
+static void _initSharedDebug(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         pthread_mutex_init(&_sharedDebugLock, NULL);
@@ -50,7 +50,7 @@ static void _setSharedDebugOption(KKTextDebugOption *option) {
     pthread_mutex_unlock(&_sharedDebugLock);
 }
 
-static KKTextDebugOption *_getSharedDebugOption() {
+static KKTextDebugOption *_getSharedDebugOption(void) {
     _initSharedDebug();
     pthread_mutex_lock(&_sharedDebugLock);
     KKTextDebugOption *op = _sharedDebugOption;
@@ -138,4 +138,3 @@ static void _removeDebugTarget(id<KKTextDebugTarget> target) {
 }
 
 @end
-

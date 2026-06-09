@@ -15,7 +15,7 @@
 
 
 /// Global display queue, used for content rendering.
-static dispatch_queue_t KKTextAsyncLayerGetDisplayQueue() {
+static dispatch_queue_t KKTextAsyncLayerGetDisplayQueue(void) {
 #define MAX_QUEUE_COUNT 16
     static int queueCount;
     static dispatch_queue_t queues[MAX_QUEUE_COUNT];
@@ -41,7 +41,7 @@ static dispatch_queue_t KKTextAsyncLayerGetDisplayQueue() {
 #undef MAX_QUEUE_COUNT
 }
 
-static dispatch_queue_t KKTextAsyncLayerGetReleaseQueue() {
+static dispatch_queue_t KKTextAsyncLayerGetReleaseQueue(void) {
 #ifdef KKDispatchQueuePool_h
     return KKDispatchQueueGetForQOS(NSQualityOfServiceDefault);
 #else
@@ -141,7 +141,7 @@ static dispatch_queue_t KKTextAsyncLayerGetReleaseQueue() {
         if (task.willDisplay) task.willDisplay(self);
         _KKTextSentinel *sentinel = _sentinel;
         int32_t value = sentinel.value;
-        BOOL (^isCancelled)() = ^BOOL() {
+        BOOL (^isCancelled)(void) = ^BOOL(void) {
             return value != sentinel.value;
         };
         CGSize size = self.bounds.size;

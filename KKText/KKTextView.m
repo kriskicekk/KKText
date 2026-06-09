@@ -25,7 +25,7 @@
 #import "UIView+KKText.h"
 
 
-static double _KKDeviceSystemVersion() {
+static double _KKDeviceSystemVersion(void) {
     static double version;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{

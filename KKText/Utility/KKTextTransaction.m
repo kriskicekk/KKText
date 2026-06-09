@@ -32,7 +32,7 @@ static void KKRunLoopObserverCallBack(CFRunLoopObserverRef observer, CFRunLoopAc
     }];
 }
 
-static void KKTextTransactionSetup() {
+static void KKTextTransactionSetup(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         transactionSet = [NSMutableSet new];

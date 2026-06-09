@@ -234,13 +234,13 @@ static inline CGRect KKTextEmojiGetGlyphBoundingRectWithFontSize(CGFloat fontSiz
  Get the character set which should rotate in vertical form.
  @return The shared character set.
  */
-NSCharacterSet *KKTextVerticalFormRotateCharacterSet();
+NSCharacterSet *KKTextVerticalFormRotateCharacterSet(void);
 
 /**
  Get the character set which should rotate and move in vertical form.
  @return The shared character set.
  */
-NSCharacterSet *KKTextVerticalFormRotateAndMoveCharacterSet();
+NSCharacterSet *KKTextVerticalFormRotateAndMoveCharacterSet(void);
 
 
 
@@ -365,10 +365,10 @@ static inline CGFloat KKTextCGPointGetDistanceToRect(CGPoint p, CGRect r) {
 
 
 /// Get main screen's scale.
-CGFloat KKTextScreenScale();
+CGFloat KKTextScreenScale(void);
 
 /// Get main screen's size. Height is always larger than width.
-CGSize KKTextScreenSize();
+CGSize KKTextScreenSize(void);
 
 /// Convert point to pixel.
 static inline CGFloat KKTextCGFloatToPixel(CGFloat value) {
@@ -556,9 +556,9 @@ static inline CFRange KKTextCFRangeFromNSRange(NSRange range) {
 
 
 /// Returns YES in App Extension.
-BOOL KKTextIsAppExtension();
+BOOL KKTextIsAppExtension(void);
 
 /// Returns nil in App Extension.
-UIApplication * _Nullable KKTextSharedApplication();
+UIApplication * _Nullable KKTextSharedApplication(void);
 
 NS_ASSUME_NONNULL_END

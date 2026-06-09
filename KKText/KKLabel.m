@@ -18,7 +18,7 @@
 #import <libkern/OSAtomic.h>
 
 
-static dispatch_queue_t KKLabelGetReleaseQueue() {
+static dispatch_queue_t KKLabelGetReleaseQueue(void) {
     return dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0);
 }
 

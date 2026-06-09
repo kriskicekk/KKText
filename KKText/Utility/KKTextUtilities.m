@@ -14,7 +14,7 @@
 #import <Accelerate/Accelerate.h>
 #import "UIView+KKText.h"
 
-NSCharacterSet *KKTextVerticalFormRotateCharacterSet() {
+NSCharacterSet *KKTextVerticalFormRotateCharacterSet(void) {
     static NSMutableCharacterSet *set;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -57,7 +57,7 @@ NSCharacterSet *KKTextVerticalFormRotateCharacterSet() {
     return set;
 }
 
-NSCharacterSet *KKTextVerticalFormRotateAndMoveCharacterSet() {
+NSCharacterSet *KKTextVerticalFormRotateAndMoveCharacterSet(void) {
     static NSMutableCharacterSet *set;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -267,7 +267,7 @@ CGRect KKTextCGRectFitWithContentMode(CGRect rect, CGSize size, UIViewContentMod
     return rect;
 }
 
-CGFloat KKTextScreenScale() {
+CGFloat KKTextScreenScale(void) {
     static CGFloat scale;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -276,7 +276,7 @@ CGFloat KKTextScreenScale() {
     return scale;
 }
 
-CGSize KKTextScreenSize() {
+CGSize KKTextScreenSize(void) {
     static CGSize size;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -291,7 +291,7 @@ CGSize KKTextScreenSize() {
 }
 
 
-BOOL KKTextIsAppExtension() {
+BOOL KKTextIsAppExtension(void) {
     static BOOL isAppExtension = NO;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -302,7 +302,7 @@ BOOL KKTextIsAppExtension() {
     return isAppExtension;
 }
 
-UIApplication *KKTextSharedApplication() {
+UIApplication *KKTextSharedApplication(void) {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wundeclared-selector"
     return KKTextIsAppExtension() ? nil : [UIApplication performSelector:@selector(sharedApplication)];
