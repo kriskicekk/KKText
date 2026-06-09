@@ -79,7 +79,6 @@ static void KKTextMarkTruncationSource(NSMutableAttributedString *text, KKTextTr
     }];
 }
 
-
 @implementation KKTextLinePositionSimpleModifier
 - (void)modifyLines:(NSArray *)lines fromText:(NSAttributedString *)text inContainer:(KKTextContainer *)container {
     if (container.verticalForm) {
@@ -437,13 +436,15 @@ dispatch_semaphore_signal(_lock);
     static BOOL needFixLayoutSizeBug = NO;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        double systemVersionDouble = [UIDevice currentDevice].systemVersion.doubleValue;
+        double systemVersionDouble = KKTextPlatformSystemVersion();
         if (8.3 <= systemVersionDouble && systemVersionDouble < 9) {
             needFixJoinedEmojiBug = YES;
         }
+#if KKTEXT_UIKIT
         if (systemVersionDouble >= 10 && systemVersionDouble < 26) {
             needFixLayoutSizeBug = YES;
         }
+#endif
     });
     if (needFixJoinedEmojiBug) {
         [((NSMutableAttributedString *)text) kk_setClearColorToJoinedEmoji];
@@ -2288,6 +2289,48 @@ typedef NS_OPTIONS(NSUInteger, KKTextBorderType) {
     KKTextBorderTypeNormal    = 1 << 1,
 };
 
+static inline void KKTextApplyCoreTextDrawTransform(CGContextRef context, CGSize size) {
+#if KKTEXT_UIKIT
+    CGContextTranslateCTM(context, 0, size.height);
+    CGContextScaleCTM(context, 1, -1);
+#else
+    (void)context;
+    (void)size;
+#endif
+}
+
+static inline CGFloat KKTextCoreTextDrawY(CGSize size, CGFloat y) {
+    // `KKTextLine.position` is stored in top-left layout coordinates on both
+    // platforms, while CoreText text positions use a y-up drawing coordinate.
+    return size.height - y;
+}
+
+static inline CGFloat KKTextCoreTextDrawGlyphY(CGSize size, CGFloat lineY, CGFloat glyphY) {
+    return size.height - (lineY + glyphY);
+}
+
+static inline CGFloat KKTextCoreTextDrawVerticalGlyphY(CGSize size, CGFloat lineY, CGFloat glyphX, CGFloat ofs, CGFloat halfWidth, KKTextRunGlyphDrawMode mode) {
+    CGFloat y = size.height - lineY - glyphX - (ofs + halfWidth);
+    if (mode == KKTextRunGlyphDrawModeVerticalRotateMove) y += halfWidth;
+    return y;
+}
+
+static inline CGFloat KKTextCoreTextDrawRotatedGlyphX(CGSize size, CGFloat lineY, CGFloat glyphX) {
+    return lineY - size.height + glyphX;
+}
+
+static inline void KKTextDrawCGImageInRect(CGContextRef context, CGImageRef image, CGRect rect) {
+#if KKTEXT_UIKIT
+    CGContextSaveGState(context);
+    CGContextTranslateCTM(context, 0, CGRectGetMaxY(rect) + CGRectGetMinY(rect));
+    CGContextScaleCTM(context, 1, -1);
+    CGContextDrawImage(context, rect, image);
+    CGContextRestoreGState(context);
+#else
+    CGContextDrawImage(context, rect, image);
+#endif
+}
+
 static CGRect KKTextMergeRectInSameLine(CGRect rect1, CGRect rect2, BOOL isVertical) {
     if (isVertical) {
         CGFloat top = MIN(rect1.origin.y, rect2.origin.y);
@@ -2400,16 +2443,15 @@ static void KKTextDrawRun(KKTextLine *line, CTRunRef run, CGContextRef context, 
                                 CGFloat ofs = (ascent - descent) * 0.5;
                                 CGFloat w = glyphAdvances[g].width * 0.5;
                                 CGFloat x = line.position.x + verticalOffset + glyphPositions[g].y + (ofs - w);
-                                CGFloat y = -line.position.y + size.height - glyphPositions[g].x - (ofs + w);
+                                CGFloat y = KKTextCoreTextDrawVerticalGlyphY(size, line.position.y, glyphPositions[g].x, ofs, w, mode);
                                 if (mode == KKTextRunGlyphDrawModeVerticalRotateMove) {
                                     x += w;
-                                    y += w;
                                 }
                                 CGContextSetTextPosition(context, x, y);
                             } else {
                                 CGContextRotateCTM(context, KKTextDegreesToRadians(-90));
                                 CGContextSetTextPosition(context,
-                                                         line.position.y - size.height + glyphPositions[g].x,
+                                                         KKTextCoreTextDrawRotatedGlyphX(size, line.position.y, glyphPositions[g].x),
                                                          line.position.x + verticalOffset + glyphPositions[g].y);
                             }
                             
@@ -2442,7 +2484,7 @@ static void KKTextDrawRun(KKTextLine *line, CTRunRef run, CGContextRef context, 
                             CGContextSetTextMatrix(context, glyphTransform);
                             CGContextSetTextPosition(context,
                                                      line.position.x + glyphPositions[g].x,
-                                                     size.height - (line.position.y + glyphPositions[g].y));
+                                                     KKTextCoreTextDrawGlyphY(size, line.position.y, glyphPositions[g].y));
                             
                             if (KKTextCTFontContainsColorBitmapGlyphs(runFont)) {
                                 CTFontDrawGlyphs(runFont, glyphs + g, &zeroPoint, 1, context);
@@ -2705,8 +2747,7 @@ static void KKTextDrawText(KKTextLayout *layout, CGContextRef context, CGSize si
     CGContextSaveGState(context); {
         
         CGContextTranslateCTM(context, point.x, point.y);
-        CGContextTranslateCTM(context, 0, size.height);
-        CGContextScaleCTM(context, 1, -1);
+        KKTextApplyCoreTextDrawTransform(context, size);
         
         BOOL isVertical = layout.container.verticalForm;
         CGFloat verticalOffset = isVertical ? (size.width - layout.container.size.width) : 0;
@@ -2717,7 +2758,7 @@ static void KKTextDrawText(KKTextLayout *layout, CGContextRef context, CGSize si
             if (layout.truncatedLine && layout.truncatedLine.index == line.index) line = layout.truncatedLine;
             NSArray *lineRunRanges = line.verticalRotateRange;
             CGFloat posX = line.position.x + verticalOffset;
-            CGFloat posY = size.height - line.position.y;
+            CGFloat posY = KKTextCoreTextDrawY(size, line.position.y);
             CFArrayRef runs = CTLineGetGlyphRuns(line.CTLine);
             for (NSUInteger r = 0, rMax = CFArrayGetCount(runs); r < rMax; r++) {
                 CTRunRef run = CFArrayGetValueAtIndex(runs, r);
@@ -3105,11 +3146,7 @@ static void KKTextDrawAttachment(KKTextLayout *layout, CGContextRef context, CGS
         if (image) {
             CGImageRef ref = image.CGImage;
             if (ref) {
-                CGContextSaveGState(context);
-                CGContextTranslateCTM(context, 0, CGRectGetMaxY(rect) + CGRectGetMinY(rect));
-                CGContextScaleCTM(context, 1, -1);
-                CGContextDrawImage(context, rect, ref);
-                CGContextRestoreGState(context);
+                KKTextDrawCGImageInRect(context, ref, rect);
             }
         } else if (view) {
             view.frame = rect;
@@ -3130,8 +3167,7 @@ static void KKTextDrawShadow(KKTextLayout *layout, CGContextRef context, CGSize 
     
     CGContextSaveGState(context); {
         CGContextTranslateCTM(context, point.x, point.y);
-        CGContextTranslateCTM(context, 0, size.height);
-        CGContextScaleCTM(context, 1, -1);
+        KKTextApplyCoreTextDrawTransform(context, size);
         NSArray *lines = layout.lines;
         for (NSUInteger l = 0, lMax = layout.lines.count; l < lMax; l++) {
             if (cancel && cancel()) break;
@@ -3139,7 +3175,7 @@ static void KKTextDrawShadow(KKTextLayout *layout, CGContextRef context, CGSize 
             if (layout.truncatedLine && layout.truncatedLine.index == line.index) line = layout.truncatedLine;
             NSArray *lineRunRanges = line.verticalRotateRange;
             CGFloat linePosX = line.position.x;
-            CGFloat linePosY = size.height - line.position.y;
+            CGFloat linePosY = KKTextCoreTextDrawY(size, line.position.y);
             CFArrayRef runs = CTLineGetGlyphRuns(line.CTLine);
             for (NSUInteger r = 0, rMax = CFArrayGetCount(runs); r < rMax; r++) {
                 CTRunRef run = CFArrayGetValueAtIndex(runs, r);
@@ -3175,8 +3211,7 @@ static void KKTextDrawShadow(KKTextLayout *layout, CGContextRef context, CGSize 
 static void KKTextDrawInnerShadow(KKTextLayout *layout, CGContextRef context, CGSize size, CGPoint point, BOOL (^cancel)(void)) {
     CGContextSaveGState(context);
     CGContextTranslateCTM(context, point.x, point.y);
-    CGContextTranslateCTM(context, 0, size.height);
-    CGContextScaleCTM(context, 1, -1);
+    KKTextApplyCoreTextDrawTransform(context, size);
     CGContextSetTextMatrix(context, CGAffineTransformIdentity);
     
     BOOL isVertical = layout.container.verticalForm;
@@ -3190,7 +3225,7 @@ static void KKTextDrawInnerShadow(KKTextLayout *layout, CGContextRef context, CG
         if (layout.truncatedLine && layout.truncatedLine.index == line.index) line = layout.truncatedLine;
         NSArray *lineRunRanges = line.verticalRotateRange;
         CGFloat linePosX = line.position.x;
-        CGFloat linePosY = size.height - line.position.y;
+        CGFloat linePosY = KKTextCoreTextDrawY(size, line.position.y);
         CFArrayRef runs = CTLineGetGlyphRuns(line.CTLine);
         for (NSUInteger r = 0, rMax = CFArrayGetCount(runs); r < rMax; r++) {
             CTRunRef run = CFArrayGetValueAtIndex(runs, r);
@@ -3245,7 +3280,7 @@ static void KKTextDrawInnerShadow(KKTextLayout *layout, CGContextRef context, CG
 }
 
 static void KKTextDrawDebug(KKTextLayout *layout, CGContextRef context, CGSize size, CGPoint point, KKTextDebugOption *op) {
-    UIGraphicsPushContext(context);
+    KKTextPlatformPushContext(context);
     CGContextSaveGState(context);
     CGContextTranslateCTM(context, point.x, point.y);
     CGContextSetLineWidth(context, 1.0 / KKTextScreenScale());
@@ -3433,7 +3468,7 @@ static void KKTextDrawDebug(KKTextLayout *layout, CGContextRef context, CGSize s
         }
     }
     CGContextRestoreGState(context);
-    UIGraphicsPopContext();
+    KKTextPlatformPopContext();
 }
 
 

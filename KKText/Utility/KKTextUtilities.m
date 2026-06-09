@@ -271,7 +271,7 @@ CGFloat KKTextScreenScale() {
     static CGFloat scale;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        scale = [UIScreen mainScreen].scale;
+        scale = KKTextPlatformScreenScale();
     });
     return scale;
 }
@@ -280,7 +280,7 @@ CGSize KKTextScreenSize() {
     static CGSize size;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        size = [UIScreen mainScreen].bounds.size;
+        size = KKTextPlatformScreenSize();
         if (size.height < size.width) {
             CGFloat tmp = size.height;
             size.height = size.width;

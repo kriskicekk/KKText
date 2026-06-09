@@ -24,7 +24,7 @@ static dispatch_queue_t KKTextAsyncLayerGetDisplayQueue() {
     dispatch_once(&onceToken, ^{
         queueCount = (int)[NSProcessInfo processInfo].activeProcessorCount;
         queueCount = queueCount < 1 ? 1 : queueCount > MAX_QUEUE_COUNT ? MAX_QUEUE_COUNT : queueCount;
-        if ([UIDevice currentDevice].systemVersion.floatValue >= 8.0) {
+        if (KKTextPlatformSystemVersion() >= 8.0) {
             for (NSUInteger i = 0; i < queueCount; i++) {
                 dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
                 queues[i] = dispatch_queue_create("com.ibireme.text.render", attr);
@@ -93,7 +93,7 @@ static dispatch_queue_t KKTextAsyncLayerGetReleaseQueue() {
     static CGFloat scale; //global
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        scale = [UIScreen mainScreen].scale;
+        scale = KKTextPlatformScreenScale();
     });
     self.contentsScale = scale;
     _sentinel = [_KKTextSentinel new];
@@ -160,38 +160,21 @@ static dispatch_queue_t KKTextAsyncLayerGetReleaseQueue() {
                 CGColorRelease(backgroundColor);
                 return;
             }
-            UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
-            format.opaque = opaque;
-            format.scale = scale;
-            UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size format:format];
             __block BOOL cancelledDuringDisplay = NO;
-            UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *rendererContext) {
-                CGContextRef context = rendererContext.CGContext;
-                if (opaque && context) {
-                    CGContextSaveGState(context); {
-                        if (!backgroundColor || CGColorGetAlpha(backgroundColor) < 1) {
-                            CGContextSetFillColorWithColor(context, [UIColor whiteColor].CGColor);
-                            CGContextAddRect(context, CGRectMake(0, 0, size.width * scale, size.height * scale));
-                            CGContextFillPath(context);
-                        }
-                        if (backgroundColor) {
-                            CGContextSetFillColorWithColor(context, backgroundColor);
-                            CGContextAddRect(context, CGRectMake(0, 0, size.width * scale, size.height * scale));
-                            CGContextFillPath(context);
-                        }
-                    } CGContextRestoreGState(context);
-                }
+            CGImageRef image = KKTextCreateImage(size, opaque, scale, backgroundColor, ^(CGContextRef context) {
                 task.display(context, size, isCancelled);
                 cancelledDuringDisplay = isCancelled();
-            }];
+            });
             CGColorRelease(backgroundColor);
             if (cancelledDuringDisplay) {
+                if (image) CGImageRelease(image);
                 dispatch_async(dispatch_get_main_queue(), ^{
                     if (task.didDisplay) task.didDisplay(self, NO);
                 });
                 return;
             }
             if (isCancelled()) {
+                if (image) CGImageRelease(image);
                 dispatch_async(dispatch_get_main_queue(), ^{
                     if (task.didDisplay) task.didDisplay(self, NO);
                 });
@@ -199,9 +182,11 @@ static dispatch_queue_t KKTextAsyncLayerGetReleaseQueue() {
             }
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (isCancelled()) {
+                    if (image) CGImageRelease(image);
                     if (task.didDisplay) task.didDisplay(self, NO);
                 } else {
-                    self.contents = (__bridge id)(image.CGImage);
+                    self.contents = (__bridge id)image;
+                    if (image) CGImageRelease(image);
                     if (task.didDisplay) task.didDisplay(self, YES);
                 }
             });
@@ -215,32 +200,11 @@ static dispatch_queue_t KKTextAsyncLayerGetReleaseQueue() {
             if (task.didDisplay) task.didDisplay(self, YES);
             return;
         }
-        UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
-        format.opaque = self.opaque;
-        format.scale = self.contentsScale;
-        UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size format:format];
-        UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *rendererContext) {
-            CGContextRef context = rendererContext.CGContext;
-            if (self.opaque && context) {
-                CGSize scaledSize = size;
-                scaledSize.width *= self.contentsScale;
-                scaledSize.height *= self.contentsScale;
-                CGContextSaveGState(context); {
-                    if (!self.backgroundColor || CGColorGetAlpha(self.backgroundColor) < 1) {
-                        CGContextSetFillColorWithColor(context, [UIColor whiteColor].CGColor);
-                        CGContextAddRect(context, CGRectMake(0, 0, scaledSize.width, scaledSize.height));
-                        CGContextFillPath(context);
-                    }
-                    if (self.backgroundColor) {
-                        CGContextSetFillColorWithColor(context, self.backgroundColor);
-                        CGContextAddRect(context, CGRectMake(0, 0, scaledSize.width, scaledSize.height));
-                        CGContextFillPath(context);
-                    }
-                } CGContextRestoreGState(context);
-            }
+        CGImageRef image = KKTextCreateImage(size, self.opaque, self.contentsScale, self.backgroundColor, ^(CGContextRef context) {
             task.display(context, size, ^{return NO;});
-        }];
-        self.contents = (__bridge id)(image.CGImage);
+        });
+        self.contents = (__bridge id)image;
+        if (image) CGImageRelease(image);
         if (task.didDisplay) task.didDisplay(self, YES);
     }
 }

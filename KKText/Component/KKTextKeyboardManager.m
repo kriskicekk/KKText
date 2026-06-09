@@ -118,7 +118,7 @@ static int _KKTextKeyboardViewFrameObserverKey;
                                                  name:UIKeyboardWillChangeFrameNotification
                                                object:nil];
     // for iPad (iOS 9)
-    if ([UIDevice currentDevice].systemVersion.floatValue >= 9) {
+    if (KKTextPlatformSystemVersion() >= 9) {
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(_keyboardFrameDidChangeNotification:)
                                                      name:UIKeyboardDidChangeFrameNotification
@@ -258,7 +258,7 @@ static int _KKTextKeyboardViewFrameObserverKey;
     static double v;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        v = [UIDevice currentDevice].systemVersion.doubleValue;
+        v = KKTextPlatformSystemVersion();
     });
     return v;
 }

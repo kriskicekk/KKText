@@ -10,7 +10,7 @@
 //  LICENSE file in the root directory of this source tree.
 //
 
-#import <UIKit/UIKit.h>
+#import "KKTextPlatform.h"
 #import <CoreText/CoreText.h>
 
 #if __has_include(<KKText/KKText.h>)
@@ -1297,7 +1297,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)kk_setBaselineClass:(nullable CFStringRef)baselineClass range:(NSRange)range;
 - (void)kk_setBaselineInfo:(nullable CFDictionaryRef)baselineInfo range:(NSRange)range;
 - (void)kk_setBaselineReferenceInfo:(nullable CFDictionaryRef)referenceInfo range:(NSRange)range;
-- (void)kk_setRubyAnnotation:(nullable CTRubyAnnotationRef)ruby range:(NSRange)range NS_AVAILABLE_IOS(8_0);
+- (void)kk_setRubyAnnotation:(nullable CTRubyAnnotationRef)ruby range:(NSRange)range API_AVAILABLE(ios(8.0), macos(10.10));
 - (void)kk_setAttachment:(nullable NSTextAttachment *)attachment range:(NSRange)range NS_AVAILABLE_IOS(7_0);
 - (void)kk_setLink:(nullable id)link range:(NSRange)range NS_AVAILABLE_IOS(7_0);
 - (void)kk_setTextBackedString:(nullable KKTextBackedString *)textBackedString range:(NSRange)range;
@@ -1305,7 +1305,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)kk_setTextAttachment:(nullable KKTextAttachment *)textAttachment range:(NSRange)range;
 - (void)kk_setTextHighlight:(nullable KKTextHighlight *)textHighlight range:(NSRange)range;
 - (void)kk_setTextBlockBorder:(nullable KKTextBorder *)textBlockBorder range:(NSRange)range;
-- (void)kk_setTextRubyAnnotation:(nullable KKTextRubyAnnotation *)ruby range:(NSRange)range NS_AVAILABLE_IOS(8_0);
+- (void)kk_setTextRubyAnnotation:(nullable KKTextRubyAnnotation *)ruby range:(NSRange)range API_AVAILABLE(ios(8.0), macos(10.10));
 
 
 #pragma mark - Convenience methods for text highlight

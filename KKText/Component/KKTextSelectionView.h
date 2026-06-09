@@ -10,7 +10,7 @@
 //  LICENSE file in the root directory of this source tree.
 //
 
-#import <UIKit/UIKit.h>
+#import "KKTextPlatform.h"
 
 #if __has_include(<KKText/KKText.h>)
 #import <KKText/KKTextAttribute.h>

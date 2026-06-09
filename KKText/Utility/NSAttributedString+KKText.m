@@ -27,7 +27,7 @@ static double _KKDeviceSystemVersion() {
     static double version;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        version = [UIDevice currentDevice].systemVersion.doubleValue;
+        version = KKTextPlatformSystemVersion();
     });
     return version;
 }
@@ -633,10 +633,13 @@ return style. _attr_;
     if (!image || fontSize <= 0) return nil;
     
     BOOL hasAnim = NO;
+#if KKTEXT_UIKIT
     if (image.images.count > 1) {
         hasAnim = YES;
-    } else if (NSProtocolFromString(@"KKAnimatedImage") &&
-               [image conformsToProtocol:NSProtocolFromString(@"KKAnimatedImage")]) {
+    } else
+#endif
+    if (NSProtocolFromString(@"KKAnimatedImage") &&
+        [image conformsToProtocol:NSProtocolFromString(@"KKAnimatedImage")]) {
         NSNumber *frameCount = [image valueForKey:@"animatedImageFrameCount"];
         if (frameCount.intValue > 1) hasAnim = YES;
     }

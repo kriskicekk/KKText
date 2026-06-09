@@ -380,8 +380,15 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
 }
 
 - (void)_initLabel {
+#if KKTEXT_MAC
+    self.wantsLayer = YES;
+    if (![self.layer isKindOfClass:[KKTextAsyncLayer class]]) {
+        self.layer = [KKTextAsyncLayer layer];
+    }
+    self.layer.delegate = (id<CALayerDelegate>)self;
+#endif
     ((KKTextAsyncLayer *)self.layer).displaysAsynchronously = NO;
-    self.layer.contentsScale = [UIScreen mainScreen].scale;
+    self.layer.contentsScale = KKTextPlatformScreenScale();
     self.contentMode = UIViewContentModeRedraw;
     
     _attachmentViews = [NSMutableArray new];
@@ -404,7 +411,9 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
     _fadeOnAsynchronouslyDisplay = YES;
     _fadeOnHighlight = YES;
     
+#if KKTEXT_UIKIT
     self.isAccessibilityElement = YES;
+#endif
 }
 
 - (void)_applyLineBreakMode:(NSLineBreakMode)lineBreakMode {
@@ -469,9 +478,19 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
     [_longPressTimer invalidate];
 }
 
+#if KKTEXT_UIKIT
 + (Class)layerClass {
     return [KKTextAsyncLayer class];
 }
+#else
+- (BOOL)isFlipped {
+    return YES;
+}
+
+- (CALayer *)makeBackingLayer {
+    return [KKTextAsyncLayer layer];
+}
+#endif
 
 - (void)setFrame:(CGRect)frame {
     CGSize oldSize = self.bounds.size;
@@ -572,13 +591,11 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
     return self;
 }
 
-#pragma mark - Touches
+#pragma mark - Tracking
 
-- (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
+- (void)_trackTouchBeganAtPoint:(CGPoint)point {
     [self _updateIfNeeded];
-    UITouch *touch = touches.anyObject;
-    CGPoint point = [touch locationInView:self];
-    
+
     _highlight = [self _getHighlightAtPoint:point range:&_highlightRange];
     _highlightLayout = nil;
     _shrinkHighlightLayout = nil;
@@ -597,17 +614,11 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
         _state.swallowTouch = NO;
         _state.touchMoved = NO;
     }
-    if (!_state.swallowTouch) {
-        [super touchesBegan:touches withEvent:event];
-    }
 }
 
-- (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
+- (void)_trackTouchMovedAtPoint:(CGPoint)point {
     [self _updateIfNeeded];
-    
-    UITouch *touch = touches.anyObject;
-    CGPoint point = [touch locationInView:self];
-    
+
     if (_state.trackingTouch) {
         if (!_state.touchMoved) {
             CGFloat moveH = point.x - _touchBeganPoint.x;
@@ -630,16 +641,9 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
             }
         }
     }
-    
-    if (!_state.swallowTouch) {
-        [super touchesMoved:touches withEvent:event];
-    }
 }
 
-- (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
-    UITouch *touch = touches.anyObject;
-    CGPoint point = [touch locationInView:self];
-    
+- (void)_trackTouchEndedAtPoint:(CGPoint)point {
     if (_state.trackingTouch) {
         [self _endLongPressTimer];
         if (!_state.touchMoved && _textTapAction) {
@@ -671,7 +675,34 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
             [self _removeHighlightAnimated:_fadeOnHighlight];
         }
     }
-    
+}
+
+#if KKTEXT_UIKIT
+
+#pragma mark - Touches
+
+- (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
+    UITouch *touch = touches.anyObject;
+    CGPoint point = [touch locationInView:self];
+    [self _trackTouchBeganAtPoint:point];
+    if (!_state.swallowTouch) {
+        [super touchesBegan:touches withEvent:event];
+    }
+}
+
+- (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
+    UITouch *touch = touches.anyObject;
+    CGPoint point = [touch locationInView:self];
+    [self _trackTouchMovedAtPoint:point];
+    if (!_state.swallowTouch) {
+        [super touchesMoved:touches withEvent:event];
+    }
+}
+
+- (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
+    UITouch *touch = touches.anyObject;
+    CGPoint point = [touch locationInView:self];
+    [self _trackTouchEndedAtPoint:point];
     if (!_state.swallowTouch) {
         [super touchesEnded:touches withEvent:event];
     }
@@ -681,6 +712,41 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
     [self _endTouch];
     if (!_state.swallowTouch) [super touchesCancelled:touches withEvent:event];
 }
+
+#else
+
+#pragma mark - Mouse Events
+
+- (CGPoint)_pointFromEvent:(NSEvent *)event {
+    return [self convertPoint:event.locationInWindow fromView:nil];
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    if (!self.isUserInteractionEnabled) {
+        [super mouseDown:event];
+        return;
+    }
+    [self _trackTouchBeganAtPoint:[self _pointFromEvent:event]];
+    if (!_state.swallowTouch) {
+        [super mouseDown:event];
+    }
+}
+
+- (void)mouseDragged:(NSEvent *)event {
+    [self _trackTouchMovedAtPoint:[self _pointFromEvent:event]];
+    if (!_state.swallowTouch) {
+        [super mouseDragged:event];
+    }
+}
+
+- (void)mouseUp:(NSEvent *)event {
+    [self _trackTouchEndedAtPoint:[self _pointFromEvent:event]];
+    if (!_state.swallowTouch) {
+        [super mouseUp:event];
+    }
+}
+
+#endif
 
 #pragma mark - Properties
 
@@ -1149,7 +1215,7 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
             // If the display task is cancelled, we should clear the attachments.
             for (KKTextAttachment *a in drawLayout.attachments) {
                 if ([a.content isKindOfClass:[UIView class]]) {
-                    if (((UIView *)a.content).superview == layer.delegate) {
+                    if (((UIView *)a.content).superview == (UIView *)layer.delegate) {
                         [((UIView *)a.content) removeFromSuperview];
                     }
                 } else if ([a.content isKindOfClass:[CALayer class]]) {
@@ -1214,6 +1280,8 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
 @end
 
 
+
+#if KKTEXT_UIKIT
 
 @interface KKLabel(IBInspectableProperties)
 @end
@@ -1310,3 +1378,5 @@ static dispatch_queue_t KKLabelGetReleaseQueue() {
 }
 
 @end
+
+#endif

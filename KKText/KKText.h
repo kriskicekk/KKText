@@ -10,13 +10,15 @@
 //  LICENSE file in the root directory of this source tree.
 //
 
-#import <UIKit/UIKit.h>
+#import "KKTextPlatform.h"
 
 #if __has_include(<KKText/KKText.h>)
 FOUNDATION_EXPORT double KKTextVersionNumber;
 FOUNDATION_EXPORT const unsigned char KKTextVersionString[];
 #import <KKText/KKLabel.h>
+#if KKTEXT_UIKIT
 #import <KKText/KKTextView.h>
+#endif
 #import <KKText/KKTextAttribute.h>
 #import <KKText/KKTextArchiver.h>
 #import <KKText/KKTextParser.h>
@@ -26,14 +28,20 @@ FOUNDATION_EXPORT const unsigned char KKTextVersionString[];
 #import <KKText/KKTextLine.h>
 #import <KKText/KKTextInput.h>
 #import <KKText/KKTextDebugOption.h>
+#if KKTEXT_UIKIT
 #import <KKText/KKTextKeyboardManager.h>
+#endif
 #import <KKText/KKTextUtilities.h>
 #import <KKText/NSAttributedString+KKText.h>
 #import <KKText/NSParagraphStyle+KKText.h>
+#if KKTEXT_UIKIT
 #import <KKText/UIPasteboard+KKText.h>
+#endif
 #else
 #import "KKLabel.h"
+#if KKTEXT_UIKIT
 #import "KKTextView.h"
+#endif
 #import "KKTextAttribute.h"
 #import "KKTextArchiver.h"
 #import "KKTextParser.h"
@@ -43,9 +51,13 @@ FOUNDATION_EXPORT const unsigned char KKTextVersionString[];
 #import "KKTextLine.h"
 #import "KKTextInput.h"
 #import "KKTextDebugOption.h"
+#if KKTEXT_UIKIT
 #import "KKTextKeyboardManager.h"
+#endif
 #import "KKTextUtilities.h"
 #import "NSAttributedString+KKText.h"
 #import "NSParagraphStyle+KKText.h"
+#if KKTEXT_UIKIT
 #import "UIPasteboard+KKText.h"
+#endif
 #endif

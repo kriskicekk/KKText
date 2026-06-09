@@ -11,7 +11,7 @@
 //
 
 #import "KKTextAttribute.h"
-#import <UIKit/UIKit.h>
+#import "KKTextPlatform.h"
 #import <CoreText/CoreText.h>
 #import "NSAttributedString+KKText.h"
 #import "KKTextArchiver.h"
@@ -21,7 +21,7 @@ static double _KKDeviceSystemVersion() {
     static double version;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        version = [UIDevice currentDevice].systemVersion.doubleValue;
+        version = KKTextPlatformSystemVersion();
     });
     return version;
 }

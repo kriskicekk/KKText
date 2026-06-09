@@ -29,6 +29,8 @@
     return nil;
 }
 
+#if KKTEXT_UIKIT
+
 - (CGFloat)kk_visibleAlpha {
     if ([self isKindOfClass:[UIWindow class]]) {
         if (self.hidden) return 0;
@@ -120,5 +122,77 @@
     rect = [self convertRect:rect fromView:to];
     return rect;
 }
+
+#else
+
+- (CGFloat)kk_visibleAlpha {
+    if (!self.window || self.hidden) return 0;
+    CGFloat alpha = 1;
+    for (UIView *view = self; view; view = view.superview) {
+        if (view.hidden) return 0;
+        alpha *= view.alphaValue;
+    }
+    return alpha;
+}
+
+- (CGPoint)kk_convertPoint:(CGPoint)point toViewOrWindow:(UIView *)view {
+    if (!view) return [self convertPoint:point toView:nil];
+    NSWindow *fromWindow = self.window;
+    NSWindow *toWindow = [view isKindOfClass:[NSWindow class]] ? (id)view : view.window;
+    if (!fromWindow || !toWindow || fromWindow == toWindow) {
+        return [self convertPoint:point toView:view];
+    }
+    point = [self convertPoint:point toView:nil];
+    point = [fromWindow convertPointToScreen:point];
+    point = [toWindow convertPointFromScreen:point];
+    if ([view isKindOfClass:[NSWindow class]]) return point;
+    return [view convertPoint:point fromView:nil];
+}
+
+- (CGPoint)kk_convertPoint:(CGPoint)point fromViewOrWindow:(UIView *)view {
+    if (!view) return [self convertPoint:point fromView:nil];
+    NSWindow *fromWindow = [view isKindOfClass:[NSWindow class]] ? (id)view : view.window;
+    NSWindow *toWindow = self.window;
+    if (!fromWindow || !toWindow || fromWindow == toWindow) {
+        return [self convertPoint:point fromView:view];
+    }
+    if (![view isKindOfClass:[NSWindow class]]) {
+        point = [view convertPoint:point toView:nil];
+    }
+    point = [fromWindow convertPointToScreen:point];
+    point = [toWindow convertPointFromScreen:point];
+    return [self convertPoint:point fromView:nil];
+}
+
+- (CGRect)kk_convertRect:(CGRect)rect toViewOrWindow:(UIView *)view {
+    if (!view) return [self convertRect:rect toView:nil];
+    NSWindow *fromWindow = self.window;
+    NSWindow *toWindow = [view isKindOfClass:[NSWindow class]] ? (id)view : view.window;
+    if (!fromWindow || !toWindow || fromWindow == toWindow) {
+        return [self convertRect:rect toView:view];
+    }
+    rect = [self convertRect:rect toView:nil];
+    rect = [fromWindow convertRectToScreen:rect];
+    rect = [toWindow convertRectFromScreen:rect];
+    if ([view isKindOfClass:[NSWindow class]]) return rect;
+    return [view convertRect:rect fromView:nil];
+}
+
+- (CGRect)kk_convertRect:(CGRect)rect fromViewOrWindow:(UIView *)view {
+    if (!view) return [self convertRect:rect fromView:nil];
+    NSWindow *fromWindow = [view isKindOfClass:[NSWindow class]] ? (id)view : view.window;
+    NSWindow *toWindow = self.window;
+    if (!fromWindow || !toWindow || fromWindow == toWindow) {
+        return [self convertRect:rect fromView:view];
+    }
+    if (![view isKindOfClass:[NSWindow class]]) {
+        rect = [view convertRect:rect toView:nil];
+    }
+    rect = [fromWindow convertRectToScreen:rect];
+    rect = [toWindow convertRectFromScreen:rect];
+    return [self convertRect:rect fromView:nil];
+}
+
+#endif
 
 @end

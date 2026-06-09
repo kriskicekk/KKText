@@ -29,7 +29,7 @@ static double _KKDeviceSystemVersion() {
     static double version;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        version = [UIDevice currentDevice].systemVersion.doubleValue;
+        version = KKTextPlatformSystemVersion();
     });
     return version;
 }

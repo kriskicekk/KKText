@@ -10,7 +10,7 @@
 //  LICENSE file in the root directory of this source tree.
 //
 
-#import <UIKit/UIKit.h>
+#import "KKTextPlatform.h"
 #import <QuartzCore/QuartzCore.h>
 
 @class KKTextAsyncLayerDisplayTask;

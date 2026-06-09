@@ -232,7 +232,7 @@ static CFTypeID CTRubyAnnotationTypeID() {
         return ctObj;
     } else if ([object class] == [KKTextRubyAnnotation class]) {
         KKTextRubyAnnotation *ruby = object;
-        if ([UIDevice currentDevice].systemVersion.floatValue >= 8) {
+        if (KKTextPlatformSystemVersion() >= 8) {
             CTRubyAnnotationRef ct = ruby.CTRubyAnnotation;
             id ctObj = (__bridge id)(ct);
             if (ct) CFRelease(ct);
