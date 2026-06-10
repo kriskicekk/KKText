@@ -2315,20 +2315,6 @@ static inline CGFloat KKTextCoreTextDrawY(CGSize size, CGFloat y) {
     return size.height - y;
 }
 
-static inline CGFloat KKTextCoreTextDrawGlyphY(CGSize size, CGFloat lineY, CGFloat glyphY) {
-    return size.height - (lineY + glyphY);
-}
-
-static inline CGFloat KKTextCoreTextDrawVerticalGlyphY(CGSize size, CGFloat lineY, CGFloat glyphX, CGFloat ofs, CGFloat halfWidth, KKTextRunGlyphDrawMode mode) {
-    CGFloat y = size.height - lineY - glyphX - (ofs + halfWidth);
-    if (mode == KKTextRunGlyphDrawModeVerticalRotateMove) y += halfWidth;
-    return y;
-}
-
-static inline CGFloat KKTextCoreTextDrawRotatedGlyphX(CGSize size, CGFloat lineY, CGFloat glyphX) {
-    return lineY - size.height + glyphX;
-}
-
 static inline void KKTextDrawCGImageInRect(CGContextRef context, CGImageRef image, CGRect rect) {
     CGContextSaveGState(context);
     CGContextTranslateCTM(context, 0, CGRectGetMaxY(rect) + CGRectGetMinY(rect));
@@ -2449,15 +2435,16 @@ static void KKTextDrawRun(KKTextLine *line, CTRunRef run, CGContextRef context, 
                                 CGFloat ofs = (ascent - descent) * 0.5;
                                 CGFloat w = glyphAdvances[g].width * 0.5;
                                 CGFloat x = line.position.x + verticalOffset + glyphPositions[g].y + (ofs - w);
-                                CGFloat y = KKTextCoreTextDrawVerticalGlyphY(size, line.position.y, glyphPositions[g].x, ofs, w, mode);
+                                CGFloat y = -line.position.y + size.height - glyphPositions[g].x - (ofs + w);
                                 if (mode == KKTextRunGlyphDrawModeVerticalRotateMove) {
                                     x += w;
+                                    y += w;
                                 }
                                 CGContextSetTextPosition(context, x, y);
                             } else {
                                 CGContextRotateCTM(context, KKTextDegreesToRadians(-90));
                                 CGContextSetTextPosition(context,
-                                                         KKTextCoreTextDrawRotatedGlyphX(size, line.position.y, glyphPositions[g].x),
+                                                         line.position.y - size.height + glyphPositions[g].x,
                                                          line.position.x + verticalOffset + glyphPositions[g].y);
                             }
                             
@@ -2490,7 +2477,7 @@ static void KKTextDrawRun(KKTextLine *line, CTRunRef run, CGContextRef context, 
                             CGContextSetTextMatrix(context, glyphTransform);
                             CGContextSetTextPosition(context,
                                                      line.position.x + glyphPositions[g].x,
-                                                     KKTextCoreTextDrawGlyphY(size, line.position.y, glyphPositions[g].y));
+                                                     size.height - (line.position.y + glyphPositions[g].y));
                             
                             if (KKTextCTFontContainsColorBitmapGlyphs(runFont)) {
                                 CTFontDrawGlyphs(runFont, glyphs + g, &zeroPoint, 1, context);
