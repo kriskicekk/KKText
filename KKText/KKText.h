@@ -16,9 +16,7 @@
 FOUNDATION_EXPORT double KKTextVersionNumber;
 FOUNDATION_EXPORT const unsigned char KKTextVersionString[];
 #import <KKText/KKLabel.h>
-#if KKTEXT_UIKIT
 #import <KKText/KKTextView.h>
-#endif
 #import <KKText/KKTextAttribute.h>
 #import <KKText/KKTextArchiver.h>
 #import <KKText/KKTextParser.h>
@@ -39,9 +37,7 @@ FOUNDATION_EXPORT const unsigned char KKTextVersionString[];
 #endif
 #else
 #import "KKLabel.h"
-#if KKTEXT_UIKIT
 #import "KKTextView.h"
-#endif
 #import "KKTextAttribute.h"
 #import "KKTextArchiver.h"
 #import "KKTextParser.h"

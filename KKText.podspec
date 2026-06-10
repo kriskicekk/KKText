@@ -18,10 +18,12 @@ Pod::Spec.new do |s|
   s.osx.source_files = [
     'KKText/KKText.{h}',
     'KKText/KKTextPlatform.{h,m}',
+    'KKText/KKTextView.h',
     'KKText/Platform/AppKit/NSBezierPath+KKText.{h,m}',
     'KKText/Platform/AppKit/NSImage+KKText.{h,m}',
     'KKText/Platform/AppKit/NSValue+KKText.{h,m}',
     'KKText/Platform/AppKit/NSView+KKText.{h,m}',
+    'KKText/Platform/AppKit/KKTextViewAppKit.m',
     'KKText/KKLabel.{h,m}',
     'KKText/String/**/*.{h,m}',
     'KKText/Component/KKTextDebugOption.{h,m}',
@@ -39,6 +41,7 @@ Pod::Spec.new do |s|
   s.osx.public_header_files = [
     'KKText/KKText.h',
     'KKText/KKTextPlatform.h',
+    'KKText/KKTextView.h',
     'KKText/Platform/AppKit/NSBezierPath+KKText.h',
     'KKText/Platform/AppKit/NSImage+KKText.h',
     'KKText/Platform/AppKit/NSValue+KKText.h',

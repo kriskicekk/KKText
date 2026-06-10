@@ -33,7 +33,11 @@ NS_ASSUME_NONNULL_BEGIN
  @discussion The API and behavior is similar to UITextViewDelegate,
  see UITextViewDelegate's documentation for more information.
  */
+#if KKTEXT_UIKIT
 @protocol KKTextViewDelegate <NSObject, UIScrollViewDelegate>
+#else
+@protocol KKTextViewDelegate <NSObject>
+#endif
 @optional
 - (BOOL)textViewShouldBeginEditing:(KKTextView *)textView;
 - (BOOL)textViewShouldEndEditing:(KKTextView *)textView;
@@ -50,7 +54,7 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 
-#if !TARGET_INTERFACE_BUILDER
+#if KKTEXT_MAC || !TARGET_INTERFACE_BUILDER
 
 /**
  The KKTextView class implements the behavior for a scrollable, multiline text region.
@@ -68,7 +72,11 @@ NS_ASSUME_NONNULL_BEGIN
  See NSAttributedString+KKText.h for more convenience methods to set the attributes.
  See KKTextAttribute.h and KKTextLayout.h for more information.
  */
+#if KKTEXT_UIKIT
 @interface KKTextView : UIScrollView <UITextInput>
+#else
+@interface KKTextView : NSScrollView <NSTextInputClient>
+#endif
 
 
 #pragma mark - Accessing the Delegate
@@ -322,6 +330,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// @name Replacing the System Input Views
 ///=============================================================================
 
+#if KKTEXT_UIKIT
 /**
  The custom input view to display when the text view becomes the first responder.
  It can be used to replace system keyboard.
@@ -345,6 +354,7 @@ NS_ASSUME_NONNULL_BEGIN
  you may set the accessory view's height. It may used by auto scroll calculation.
  */
 @property (nonatomic) CGFloat extraAccessoryViewHeight;
+#endif
 
 @end
 
@@ -400,7 +410,7 @@ IB_DESIGNABLE
 @property (nullable, nonatomic, readwrite, strong) __kindof UIView *inputAccessoryView;
 @property (nonatomic) CGFloat extraAccessoryViewHeight;
 @end
-#endif // !TARGET_INTERFACE_BUILDER
+#endif // KKTEXT_MAC || !TARGET_INTERFACE_BUILDER
 
 
 // Notifications, see UITextView's documentation for more information.
