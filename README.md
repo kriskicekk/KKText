@@ -75,6 +75,10 @@ The comparison below shows the vertical truncation line rendering difference bet
 
 ![vertical truncation line comparison](Documentation/Images/vertical_truncation_line_compare.png)
 
+### macOS Support
+
+KKText adds AppKit support while keeping the public API close to the original iOS usage. The macOS implementation maps common UIKit-style types through `KKTextPlatform.h`, supports `KKLabel` rendering and interaction, and provides a native `KKTextView` path for text input, selection, scrolling, context menu actions, and rich text copy/paste.
+
 ## Features
 
 - Asynchronous text layout and rendering.
@@ -89,7 +93,7 @@ The comparison below shows the vertical truncation line rendering difference bet
 | Platform | Minimum Version | Notes |
 | --- | --- | --- |
 | iOS | 13.0 | Supports `KKLabel` and `KKTextView`. |
-| macOS | 14.0 | Currently focuses on `KKLabel` display and interaction support. |
+| macOS | 14.0 | Supports `KKLabel` and AppKit `KKTextView` editing, selection, scrolling, context menu actions, and rich text copy/paste. |
 
 ## Installation
 
@@ -168,32 +172,54 @@ label.attributedText = text;
 
 On macOS, `UIView`, `UIColor`, `UIFont`, and related UIKit-style names are mapped to AppKit types by `KKTextPlatform.h`, so the same basic API style can be used in shared source.
 
-## Highlight Action
+## KKTextView Usage
 
-Use `KKTextHighlight` to make a text range interactive:
+Create a `KKTextView` for editable rich text:
 
 ```objc
-NSMutableAttributedString *text = [[NSMutableAttributedString alloc] initWithString:@"Tap KKText to handle an action."];
+KKTextView *textView = [[KKTextView alloc] initWithFrame:CGRectMake(20, 260, 320, 180)];
+textView.delegate = self;
+textView.font = [UIFont systemFontOfSize:16];
+textView.textColor = [UIColor blackColor];
+textView.textContainerInset = UIEdgeInsetsMake(12, 12, 12, 12);
+textView.placeholderText = @"Type something...";
+textView.editable = YES;
+textView.selectable = YES;
+textView.allowsCopyAttributedString = YES;
+textView.allowsPasteAttributedString = YES;
+
+NSMutableAttributedString *text = [[NSMutableAttributedString alloc] initWithString:@"Editable KKTextView"];
 text.kk_font = [UIFont systemFontOfSize:16];
 text.kk_color = [UIColor blackColor];
+[text kk_setFont:[UIFont boldSystemFontOfSize:22] range:NSMakeRange(0, 8)];
 
-NSRange range = [text.string rangeOfString:@"KKText"];
-if (range.location != NSNotFound) {
-    UIColor *tintColor = [UIColor colorWithRed:0.0 green:0.36 blue:0.8 alpha:1.0];
-    KKTextHighlight *highlight = [KKTextHighlight highlightWithBackgroundColor:[tintColor colorWithAlphaComponent:0.16]];
-    [highlight setColor:tintColor];
-    highlight.tapAction = ^(UIView *containerView, NSAttributedString *string, NSRange tappedRange, CGRect rect) {
-        NSLog(@"Tapped: %@", [string.string substringWithRange:tappedRange]);
-    };
-    [text kk_setTextHighlight:highlight range:range];
+textView.attributedText = text;
+[self.view addSubview:textView];
+```
+
+Handle editing changes with `KKTextViewDelegate`:
+
+```objc
+- (void)textViewDidChange:(KKTextView *)textView {
+    NSLog(@"Text length: %@", @(textView.text.length));
 }
 
-label.attributedText = text;
+- (void)textViewDidChangeSelection:(KKTextView *)textView {
+    NSLog(@"Selected range: %@", NSStringFromRange(textView.selectedRange));
+}
 ```
+
+For more detailed usage examples, see the original [YYText README](https://github.com/ibireme/YYText/blob/master/README.md).
 
 ## Notes For macOS
 
 KKText uses `KKTextPlatform.h` to map common UIKit names to AppKit types on macOS. This keeps most attributed string and label drawing APIs close to the iOS version.
+
+### KKTextView macOS Demo
+
+The macOS demo shows native `KKTextView` editing, mixed font sizes, selection, scrolling, context menu actions, and rich text copy/paste.
+
+![KKTextView macOS demo](Documentation/Images/kktextview_macos_demo.gif)
 
 ### KKLabel macOS Demo
 
@@ -205,7 +231,7 @@ Vertical layout demo:
 
 ![KKLabel macOS vertical demo](Documentation/Images/kklabel_macos_vertical_demo.png)
 
-Some editing-related UIKit features, such as keyboard management, pasteboard handling, magnifier behavior, and selection UI, are platform-specific. They are kept on iOS unless a macOS implementation is added.
+Some interaction details, such as keyboard handling, pasteboard behavior, magnifier behavior, and selection UI, remain platform-specific between iOS and macOS.
 
 ## License
 
