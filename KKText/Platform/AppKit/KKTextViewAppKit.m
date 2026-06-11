@@ -21,6 +21,7 @@ NSString *const KKTextViewTextDidBeginEditingNotification = @"KKTextViewTextDidB
 NSString *const KKTextViewTextDidChangeNotification = @"KKTextViewTextDidChange";
 NSString *const KKTextViewTextDidEndEditingNotification = @"KKTextViewTextDidEndEditing";
 
+static NSPasteboardType const KKTextViewPasteboardTypeAttributedString = @"com.ibireme.NSAttributedString";
 static NSRange KKTextViewMakeSafeRange(NSRange range, NSUInteger length) {
     if (range.location == NSNotFound) return NSMakeRange(length, 0);
     if (range.location > length) range.location = length;
@@ -182,6 +183,7 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     _selectable = YES;
     _highlightable = YES;
     _allowsCopyAttributedString = YES;
+    _allowsPasteAttributedString = YES;
     _allowsUndoAndRedo = YES;
     _maximumUndoLevel = KKTextViewDefaultMaximumUndoLevel;
     _undoStack = [NSMutableArray new];
@@ -1187,12 +1189,101 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     self.selectedRange = NSMakeRange(0, _innerText.length);
 }
 
+- (NSData *)_RTFDataForAttributedString:(NSAttributedString *)attributedString {
+    if (attributedString.length == 0) return nil;
+    NSDictionary *documentAttributes = @{NSDocumentTypeDocumentAttribute: NSRTFTextDocumentType};
+    NSData *data = nil;
+    @try {
+        data = [attributedString dataFromRange:NSMakeRange(0, attributedString.length)
+                            documentAttributes:documentAttributes
+                                         error:nil];
+    } @catch (__unused NSException *exception) {
+        data = nil;
+    }
+    return data;
+}
+
+- (NSAttributedString *)_attributedStringFromRTFData:(NSData *)data {
+    if (data.length == 0) return nil;
+    NSDictionary *options = @{NSDocumentTypeDocumentAttribute: NSRTFTextDocumentType};
+    NSAttributedString *attributedString = nil;
+    @try {
+        attributedString = [[NSAttributedString alloc] initWithData:data
+                                                            options:options
+                                                 documentAttributes:nil
+                                                              error:nil];
+    } @catch (__unused NSException *exception) {
+        attributedString = nil;
+    }
+    return attributedString.length > 0 ? attributedString : nil;
+}
+
+- (NSAttributedString *)_attributedStringFromPasteboard:(NSPasteboard *)pasteboard {
+    if (!pasteboard) return nil;
+    if (_allowsPasteAttributedString) {
+        NSData *data = [pasteboard dataForType:KKTextViewPasteboardTypeAttributedString];
+        if (data.length > 0) {
+            NSAttributedString *attributedString = [NSAttributedString kk_unarchiveFromData:data];
+            if (attributedString.length > 0) return attributedString;
+        }
+
+        data = [pasteboard dataForType:NSPasteboardTypeRTF];
+        NSAttributedString *rtfString = [self _attributedStringFromRTFData:data];
+        if (rtfString.length > 0) return rtfString;
+    }
+
+    NSString *string = [pasteboard stringForType:NSPasteboardTypeString];
+    if (string.length == 0) return nil;
+    return [self _attributedStringWithPlainText:string];
+}
+
+- (BOOL)_isPasteboardContainsValidValue {
+    NSPasteboard *pasteboard = NSPasteboard.generalPasteboard;
+    if ([pasteboard stringForType:NSPasteboardTypeString].length > 0) return YES;
+    if (_allowsPasteAttributedString) {
+        if ([pasteboard dataForType:KKTextViewPasteboardTypeAttributedString].length > 0) return YES;
+        if ([pasteboard dataForType:NSPasteboardTypeRTF].length > 0) return YES;
+    }
+    return NO;
+}
+
 - (void)copy:(id)sender {
     if (_selectedRange.length == 0) return;
+
+    NSAttributedString *attributedString = [_innerText attributedSubstringFromRange:_selectedRange];
+    NSString *plainText = [_innerText kk_plainTextForRange:_selectedRange];
+    if (plainText.length == 0) plainText = attributedString.string ?: @"";
+
+    NSData *archivedData = nil;
+    NSData *rtfData = nil;
+    NSMutableArray<NSPasteboardType> *types = [NSMutableArray array];
+    if (plainText.length > 0) {
+        [types addObject:NSPasteboardTypeString];
+    }
+    if (_allowsCopyAttributedString && attributedString.length > 0) {
+        archivedData = [attributedString kk_archiveToData];
+        if (archivedData.length > 0) {
+            [types addObject:KKTextViewPasteboardTypeAttributedString];
+        }
+        rtfData = [self _RTFDataForAttributedString:attributedString];
+        if (rtfData.length > 0) {
+            [types addObject:NSPasteboardTypeRTF];
+        }
+    }
+    if (types.count == 0) return;
+
     NSPasteboard *pasteboard = NSPasteboard.generalPasteboard;
     [pasteboard clearContents];
-    NSString *string = [_innerText.string substringWithRange:_selectedRange];
-    [pasteboard setString:string forType:NSPasteboardTypeString];
+    [pasteboard declareTypes:types owner:nil];
+    if (plainText.length > 0) {
+        [pasteboard setString:plainText forType:NSPasteboardTypeString];
+    }
+    if (archivedData.length > 0) {
+        [pasteboard setData:archivedData forType:KKTextViewPasteboardTypeAttributedString];
+    }
+    if (rtfData.length > 0) {
+        [pasteboard setData:rtfData forType:NSPasteboardTypeRTF];
+    }
 }
 
 - (void)cut:(id)sender {
@@ -1203,9 +1294,9 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
 
 - (void)paste:(id)sender {
     if (!_editable) return;
-    NSString *string = [NSPasteboard.generalPasteboard stringForType:NSPasteboardTypeString];
-    if (string.length == 0) return;
-    [self insertText:string replacementRange:NSMakeRange(NSNotFound, 0)];
+    NSAttributedString *attributedString = [self _attributedStringFromPasteboard:NSPasteboard.generalPasteboard];
+    if (attributedString.length == 0) return;
+    [self insertText:attributedString replacementRange:NSMakeRange(NSNotFound, 0)];
 }
 
 #pragma mark - NSTextInputClient
@@ -1393,7 +1484,7 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
 - (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
     if (action == @selector(copy:)) return _selectedRange.length > 0;
     if (action == @selector(cut:)) return _editable && _selectedRange.length > 0;
-    if (action == @selector(paste:)) return _editable && [NSPasteboard.generalPasteboard stringForType:NSPasteboardTypeString].length > 0;
+    if (action == @selector(paste:)) return _editable && [self _isPasteboardContainsValidValue];
     if (action == @selector(selectAll:)) return (_selectable || _editable) && _innerText.length > 0;
     if (action == @selector(undo:)) return _editable && [self _canUndo];
     if (action == @selector(redo:)) return _editable && [self _canRedo];
