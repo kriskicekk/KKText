@@ -1367,8 +1367,16 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
         (void)stop;
         [markedText addAttribute:key value:obj range:fullRange];
     }];
-    if (_font) [markedText addAttribute:NSFontAttributeName value:_font range:fullRange];
-    if (_textColor) [markedText addAttribute:NSForegroundColorAttributeName value:_textColor range:fullRange];
+    if (_font &&
+        ![markedText attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL] &&
+        ![markedText attribute:(id)kCTFontAttributeName atIndex:0 effectiveRange:NULL]) {
+        [markedText addAttribute:NSFontAttributeName value:_font range:fullRange];
+    }
+    if (_textColor &&
+        ![markedText attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:NULL] &&
+        ![markedText attribute:(id)kCTForegroundColorAttributeName atIndex:0 effectiveRange:NULL]) {
+        [markedText addAttribute:NSForegroundColorAttributeName value:_textColor range:fullRange];
+    }
     [markedText addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:fullRange];
     [markedText addAttribute:NSUnderlineColorAttributeName value:NSColor.keyboardFocusIndicatorColor range:fullRange];
 
