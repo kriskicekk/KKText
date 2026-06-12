@@ -884,19 +884,70 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     return NSMaxRange(_selectedRange);
 }
 
-- (NSRange)_wordRangeAtLocation:(NSUInteger)location {
+- (NSRange)_wordRangeByExtendingLayoutRange:(NSRange)range {
+    range = KKTextViewMakeSafeRange(range, _innerText.length);
+    if (range.length == 0) return range;
+    if (!_innerLayout) [self _updateLayout];
+
+    KKTextRange *textRange = [KKTextRange rangeWithRange:range];
+    KKTextRange *extendedStart = [_innerLayout textRangeByExtendingPosition:textRange.start];
+    KKTextRange *extendedEnd = [_innerLayout textRangeByExtendingPosition:textRange.end];
+    if (extendedStart && extendedEnd) {
+        NSArray *positions = [@[extendedStart.start, extendedStart.end, extendedEnd.start, extendedEnd.end]
+                              sortedArrayUsingSelector:@selector(compare:)];
+        NSRange extendedRange = [KKTextRange rangeWithStart:positions.firstObject end:positions.lastObject].asRange;
+        return KKTextViewMakeSafeRange(extendedRange, _innerText.length);
+    }
+    return range;
+}
+
+- (NSRange)_wordRangeEnclosingLayoutRange:(NSRange)range {
+    range = KKTextViewMakeSafeRange(range, _innerText.length);
     if (_innerText.length == 0) return NSMakeRange(0, 0);
-    NSUInteger safeLocation = MIN(location, _innerText.length - 1);
+
+    NSUInteger targetLocation = MIN(range.location, _innerText.length - 1);
+    NSUInteger targetEnd = range.length > 0 ? MIN(NSMaxRange(range) - 1, _innerText.length - 1) : targetLocation;
+    NSRange targetRange = NSMakeRange(targetLocation, targetEnd - targetLocation + 1);
     __block NSRange wordRange = NSMakeRange(NSNotFound, 0);
     [_innerText.string enumerateSubstringsInRange:NSMakeRange(0, _innerText.length)
                                           options:NSStringEnumerationByWords
                                        usingBlock:^(NSString *substring, NSRange substringRange, NSRange enclosingRange, BOOL *stop) {
-        if (NSLocationInRange(safeLocation, substringRange)) {
+        if (NSIntersectionRange(substringRange, targetRange).length == 0) return;
+        if (wordRange.location == NSNotFound) {
             wordRange = substringRange;
-            *stop = YES;
+        } else {
+            wordRange = NSUnionRange(wordRange, substringRange);
         }
     }];
-    if (wordRange.location != NSNotFound) return wordRange;
+    if (wordRange.location == NSNotFound) return wordRange;
+    return [self _wordRangeByExtendingLayoutRange:wordRange];
+}
+
+- (NSRange)_wordRangeAtPoint:(CGPoint)point {
+    if (_innerText.length == 0) return NSMakeRange(0, 0);
+    if (!_innerLayout) [self _updateLayout];
+
+    KKTextRange *layoutRange = [_innerLayout closestTextRangeAtPoint:point];
+    if (!layoutRange || layoutRange.asRange.length == 0) {
+        NSUInteger location = [self _textLocationForPoint:point];
+        KKTextPosition *position = [KKTextPosition positionWithOffset:MIN(location, _innerText.length)];
+        layoutRange = [_innerLayout textRangeByExtendingPosition:position inDirection:UITextLayoutDirectionRight offset:1];
+        if (!layoutRange || layoutRange.asRange.length == 0) {
+            layoutRange = [_innerLayout textRangeByExtendingPosition:position inDirection:UITextLayoutDirectionLeft offset:1];
+        }
+    }
+    if (!layoutRange) {
+        NSUInteger location = MIN([self _textLocationForPoint:point], _innerText.length - 1);
+        return [_innerText.string rangeOfComposedCharacterSequenceAtIndex:location];
+    }
+
+    NSRange range = KKTextViewMakeSafeRange(layoutRange.asRange, _innerText.length);
+    NSRange wordRange = [self _wordRangeEnclosingLayoutRange:range];
+    if (wordRange.location != NSNotFound && wordRange.length > 0) return wordRange;
+
+    if (range.length > 0) return [self _wordRangeByExtendingLayoutRange:range];
+
+    NSUInteger safeLocation = MIN(range.location, _innerText.length - 1);
     return [_innerText.string rangeOfComposedCharacterSequenceAtIndex:safeLocation];
 }
 
@@ -953,21 +1004,23 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     if (!_selectable && !_editable) return;
     [self.window makeFirstResponder:self];
     _caretActive = YES;
-    NSUInteger location = [self _textLocationForEvent:event];
+
     if (event.clickCount >= 2) {
-        NSRange range = [self _wordRangeAtLocation:location];
+        CGPoint point = [self _viewPointForEvent:event];
+        NSRange range = [self _wordRangeAtPoint:point];
         [self _setSelectedRange:range updateAnchor:YES];
         _trackingSelection = NO;
-        return;
-    }
-    if ((event.modifierFlags & NSEventModifierFlagShift) != 0) {
-        if (_selectedRange.length == 0) _selectionAnchorLocation = _selectedRange.location;
-        [self _extendSelectionToLocation:location];
     } else {
-        _selectionAnchorLocation = location;
-        [self _setSelectedRange:NSMakeRange(location, 0) updateAnchor:NO];
+        NSUInteger location = [self _textLocationForEvent:event];
+        if ((event.modifierFlags & NSEventModifierFlagShift) != 0) {
+            if (_selectedRange.length == 0) _selectionAnchorLocation = _selectedRange.location;
+            [self _extendSelectionToLocation:location];
+        } else {
+            _selectionAnchorLocation = location;
+            [self _setSelectedRange:NSMakeRange(location, 0) updateAnchor:NO];
+        }
+        _trackingSelection = YES;
     }
-    _trackingSelection = YES;
 }
 
 - (void)mouseDragged:(NSEvent *)event {
