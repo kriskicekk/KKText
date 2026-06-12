@@ -275,14 +275,6 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     return contentOffset;
 }
 
-- (CGPoint)_layoutPointFromViewPoint:(CGPoint)point {
-    return point;
-}
-
-- (CGRect)_viewRectFromLayoutRect:(CGRect)rect {
-    return rect;
-}
-
 - (void)_scrollToContentOffset:(CGPoint)contentOffset {
     NSClipView *clipView = self.contentView;
     if (!clipView) return;
@@ -372,8 +364,7 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
         CGContextSetFillColorWithColor(context, NSColor.selectedTextBackgroundColor.CGColor);
         for (KKTextSelectionRect *selectionRect in rects) {
             if (CGRectIsEmpty(selectionRect.rect) || CGRectIsNull(selectionRect.rect)) continue;
-            CGRect rect = [self _viewRectFromLayoutRect:selectionRect.rect];
-            CGContextFillRect(context, rect);
+            CGContextFillRect(context, selectionRect.rect);
         }
     } CGContextRestoreGState(context);
 }
@@ -381,7 +372,6 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
 - (void)_drawCaretInContext:(CGContextRef)context size:(CGSize)size {
     CGRect caretRect = [self _caretRectForLocation:_selectedRange.location];
     if (CGRectIsNull(caretRect)) return;
-    caretRect = [self _viewRectFromLayoutRect:caretRect];
     if (_verticalForm) {
         caretRect.size.height = MAX(caretRect.size.height, 2);
     } else {
@@ -858,14 +848,17 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
 
 - (NSUInteger)_textLocationForPoint:(CGPoint)point {
     if (!_innerLayout) [self _updateLayout];
-    CGPoint layoutPoint = [self _layoutPointFromViewPoint:point];
-    KKTextPosition *position = [_innerLayout closestPositionToPoint:layoutPoint];
+    KKTextPosition *position = [_innerLayout closestPositionToPoint:point];
     if (!position || position.offset < 0) return _innerText.length;
     return MIN((NSUInteger)position.offset, _innerText.length);
 }
 
+- (NSPoint)_viewPointForEvent:(NSEvent *)event {
+    return [_textDocumentView convertPoint:event.locationInWindow fromView:nil];
+}
+
 - (NSUInteger)_textLocationForEvent:(NSEvent *)event {
-    NSPoint point = [_textDocumentView convertPoint:event.locationInWindow fromView:nil];
+    NSPoint point = [self _viewPointForEvent:event];
     return [self _textLocationForPoint:point];
 }
 
@@ -1508,15 +1501,14 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     NSPoint windowPoint = [self.window convertPointFromScreen:point];
     NSPoint viewPoint = [_textDocumentView convertPoint:windowPoint fromView:nil];
     if (!_innerLayout) [self _updateLayout];
-    CGPoint layoutPoint = [self _layoutPointFromViewPoint:viewPoint];
-    KKTextPosition *position = [_innerLayout closestPositionToPoint:layoutPoint];
+    KKTextPosition *position = [_innerLayout closestPositionToPoint:viewPoint];
     return position ? MIN((NSUInteger)position.offset, _innerText.length) : NSNotFound;
 }
 
 - (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actualRange {
     range = KKTextViewMakeSafeRange(range, _innerText.length);
     if (actualRange) *actualRange = range;
-    NSRect rect = [self _viewRectFromLayoutRect:[self _firstRectForRange:range]];
+    NSRect rect = [self _firstRectForRange:range];
     rect = [_textDocumentView convertRect:rect toView:nil];
     return self.window ? [self.window convertRectToScreen:rect] : rect;
 }
