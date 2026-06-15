@@ -351,13 +351,7 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
         }
     }
     context.lineBreakRange = NSMakeRange(lineBreakLocation, lineBreakLength);
-    if (lineBreakLength > 0) {
-        NSAttributedString *lineBreakText = [_innerText attributedSubstringFromRange:context.lineBreakRange];
-        context.lineBreakText = [self _hiddenLayoutTextWithAttributedString:lineBreakText];
-    } else {
-        context.lineBreakText = [NSMutableAttributedString new];
-    }
-    context.layoutProbeText = [NSMutableAttributedString new];
+    context.layoutTailText = [NSMutableAttributedString new];
     return context;
 }
 
@@ -382,8 +376,8 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     NSMutableDictionary *attributes = nil;
     if (context.text.length > 0) {
         attributes = [[context.text kk_attributesAtIndex:0] mutableCopy];
-    } else if (context.lineBreakText.length > 0) {
-        attributes = [[context.lineBreakText kk_attributesAtIndex:0] mutableCopy];
+    } else if (context.range.location < _innerText.length) {
+        attributes = [[_innerText kk_attributesAtIndex:context.range.location] mutableCopy];
     } else {
         attributes = [_currentTypingAttributes mutableCopy];
     }
@@ -403,18 +397,23 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     return [[NSMutableAttributedString alloc] initWithString:@"\u200B" attributes:attributes];
 }
 
-- (NSMutableAttributedString *)_layoutTextForParagraphContext:(_KKTextViewParagraphContext *)context {
-    NSMutableAttributedString *layoutText = context.text.mutableCopy ?: [NSMutableAttributedString new];
-    if (context.lineBreakText.length > 0) {
-        [layoutText appendAttributedString:context.lineBreakText];
-    }
-    if (context.layoutProbeText.length > 0) {
-        [layoutText appendAttributedString:context.layoutProbeText];
-    } else if (context.lineBreakText.length == 0) {
+- (NSMutableAttributedString *)_paragraphLayoutTailTextForContext:(_KKTextViewParagraphContext *)context nextContext:(_KKTextViewParagraphContext *)nextContext {
+    NSMutableAttributedString *tailText = [NSMutableAttributedString new];
+    if (context.lineBreakRange.length > 0) {
+        NSAttributedString *lineBreakSource = [_innerText attributedSubstringFromRange:context.lineBreakRange];
+        [tailText appendAttributedString:[self _hiddenLayoutTextWithAttributedString:lineBreakSource]];
+        [tailText appendAttributedString:[self _paragraphLayoutProbeTextForNextContext:nextContext]];
+    } else {
         NSDictionary *attributes = [self _paragraphSentinelAttributesForContext:context];
         NSAttributedString *sentinel = [[NSAttributedString alloc] initWithString:@"\r" attributes:attributes];
-        [layoutText appendAttributedString:sentinel];
+        [tailText appendAttributedString:sentinel];
     }
+    return tailText;
+}
+
+- (NSMutableAttributedString *)_layoutTextForParagraphContext:(_KKTextViewParagraphContext *)context {
+    NSMutableAttributedString *layoutText = context.text.mutableCopy ?: [NSMutableAttributedString new];
+    [layoutText appendAttributedString:context.layoutTailText ?: [NSMutableAttributedString new]];
     return layoutText;
 }
 
@@ -671,7 +670,7 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
 }
 
 - (BOOL)_paragraphContextHasLineBreakTerminator:(_KKTextViewParagraphContext *)context {
-    return context.lineBreakText.length > 0;
+    return context.lineBreakRange.length > 0;
 }
 
 - (NSUInteger)_paragraphAttributeIndexForContext:(_KKTextViewParagraphContext *)context preferEnd:(BOOL)preferEnd {
@@ -699,15 +698,15 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
 
 - (CGFloat)_paragraphLineBreakAdvanceForContext:(_KKTextViewParagraphContext *)context {
     if (![self _paragraphContextHasLineBreakTerminator:context] || !context.layout) return 0;
-    NSUInteger localLocation = context.text.length + MAX(context.lineBreakText.length, 1);
+    NSUInteger localLocation = context.text.length + MAX(context.lineBreakRange.length, 1);
     KKTextPosition *position = [KKTextPosition positionWithOffset:localLocation affinity:KKTextAffinityBackward];
     CGRect rect = [context.layout caretRectForPosition:position];
     return CGRectIsNull(rect) ? 0 : ceil(CGRectGetMinY(rect));
 }
 
 - (CGFloat)_paragraphAdvanceToNextContext:(_KKTextViewParagraphContext *)context nextContext:(_KKTextViewParagraphContext *)nextContext {
-    if (!nextContext || !context.layout || context.layoutProbeText.length == 0) return 0;
-    NSUInteger probeLocation = context.text.length + context.lineBreakText.length;
+    if (!nextContext || !context.layout || context.lineBreakRange.length == 0) return 0;
+    NSUInteger probeLocation = context.text.length + context.lineBreakRange.length;
     KKTextPosition *position = [KKTextPosition positionWithOffset:probeLocation];
     CGRect rect = [context.layout caretRectForPosition:position];
     if (CGRectIsNull(rect)) {
@@ -733,6 +732,76 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     return MAX(height, [self _minimumParagraphHeightForContext:context]);
 }
 
+- (BOOL)_selectionRange:(NSRange)range containsEmptyParagraphContext:(_KKTextViewParagraphContext *)context {
+    if (!context || context.text.length > 0 || range.length == 0) return NO;
+    NSUInteger selectionStart = range.location;
+    NSUInteger selectionEnd = NSMaxRange(range);
+    if (context.lineBreakRange.length > 0) {
+        return NSIntersectionRange(range, context.lineBreakRange).length > 0;
+    }
+    if (context.range.location == 0 || selectionStart >= context.range.location || selectionEnd < context.range.location) {
+        return NO;
+    }
+    unichar previous = [_innerText.string characterAtIndex:context.range.location - 1];
+    return KKTextIsLinebreakChar(previous);
+}
+
+- (BOOL)_selectionRange:(NSRange)range containsLineBreakForParagraphContext:(_KKTextViewParagraphContext *)context {
+    if (!context || context.lineBreakRange.length == 0 || range.length == 0) return NO;
+    return NSIntersectionRange(range, context.lineBreakRange).length > 0;
+}
+
+- (CGRect)_paragraphTailSelectionLineBoundsForContext:(_KKTextViewParagraphContext *)context {
+    if (!context.layout) return CGRectNull;
+
+    NSUInteger lineIndex = [self _lineIndexForParagraphContext:context localLocation:context.text.length];
+    if (lineIndex == NSNotFound) {
+        lineIndex = [self _edgeLineIndexForParagraphContext:context direction:UITextLayoutDirectionDown];
+    }
+    if (lineIndex == NSNotFound) return CGRectNull;
+
+    KKTextLine *line = context.layout.lines[lineIndex];
+    return line.bounds;
+}
+
+- (NSArray<KKTextSelectionRect *> *)_selectionRectsForParagraphTailInContext:(_KKTextViewParagraphContext *)context {
+    if (!context.contentView) return @[];
+    CGRect caretRect = [self _localCaretRectForParagraphContext:context location:NSMaxRange(context.range)];
+    if (CGRectIsNull(caretRect)) {
+        caretRect = CGRectMake(_textContainerInset.left, 0, 0, [self _minimumParagraphHeightForContext:context]);
+    }
+    CGRect lineBounds = [self _paragraphTailSelectionLineBoundsForContext:context];
+    if (CGRectIsNull(lineBounds)) {
+        lineBounds = CGRectMake(_textContainerInset.left, 0, 0, [self _minimumParagraphHeightForContext:context]);
+    }
+
+    NSMutableArray<KKTextSelectionRect *> *rects = [NSMutableArray arrayWithCapacity:2];
+    CGFloat left = _textContainerInset.left;
+    CGFloat right = _textContainerInset.right;
+    CGFloat maxX = MAX(context.contentView.bounds.size.width - right, left);
+    CGFloat minY = MAX(CGRectGetMinY(lineBounds), 0);
+    CGFloat lineMaxY = MIN(CGRectGetMaxY(lineBounds), context.contentView.bounds.size.height);
+    if (lineMaxY <= minY) {
+        lineMaxY = MIN(minY + [self _minimumParagraphHeightForContext:context], context.contentView.bounds.size.height);
+    }
+    CGFloat caretX = MIN(MAX(CGRectGetMinX(caretRect), left), maxX);
+
+    if (maxX > caretX && lineMaxY > minY) {
+        KKTextSelectionRect *lineRect = [KKTextSelectionRect new];
+        lineRect.rect = [self _documentRectForLocalRect:CGRectMake(caretX, minY, maxX - caretX, lineMaxY - minY) inParagraphContext:context];
+        lineRect.isVertical = NO;
+        [rects addObject:lineRect];
+    }
+
+    if (context.contentView.bounds.size.height > lineMaxY && maxX > left) {
+        KKTextSelectionRect *tailRect = [KKTextSelectionRect new];
+        tailRect.rect = [self _documentRectForLocalRect:CGRectMake(left, lineMaxY, maxX - left, context.contentView.bounds.size.height - lineMaxY) inParagraphContext:context];
+        tailRect.isVertical = NO;
+        [rects addObject:tailRect];
+    }
+    return rects;
+}
+
 - (CGFloat)_paragraphOriginYForContext:(_KKTextViewParagraphContext *)context fallback:(CGFloat)fallback {
     (void)context;
     return fallback;
@@ -749,12 +818,23 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     NSMutableArray<KKTextSelectionRect *> *rects = [NSMutableArray array];
     for (_KKTextViewParagraphContext *context in _paragraphContexts) {
         NSRange localRange = [self _localRangeForGlobalRange:range inParagraphContext:context];
-        if (localRange.location == NSNotFound || localRange.length == 0) continue;
+        BOOL containsLineBreak = [self _selectionRange:range containsLineBreakForParagraphContext:context];
+        if (localRange.location == NSNotFound || localRange.length == 0) {
+            if ([self _selectionRange:range containsEmptyParagraphContext:context]) {
+                [rects addObjectsFromArray:[self _selectionRectsForParagraphTailInContext:context]];
+            } else if (containsLineBreak) {
+                [rects addObjectsFromArray:[self _selectionRectsForParagraphTailInContext:context]];
+            }
+            continue;
+        }
         NSArray<KKTextSelectionRect *> *localRects = [context.layout selectionRectsForRange:[KKTextRange rangeWithRange:localRange]];
         for (KKTextSelectionRect *localRect in localRects) {
             KKTextSelectionRect *rect = localRect.copy;
             rect.rect = [self _documentRectForLocalRect:rect.rect inParagraphContext:context];
             [rects addObject:rect];
+        }
+        if (containsLineBreak) {
+            [rects addObjectsFromArray:[self _selectionRectsForParagraphTailInContext:context]];
         }
     }
     return rects;
@@ -815,15 +895,14 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     for (NSUInteger idx = 0; idx < contexts.count; idx++) {
         _KKTextViewParagraphContext *context = contexts[idx];
         _KKTextViewParagraphContext *nextContext = idx + 1 < contexts.count ? contexts[idx + 1] : nil;
-        context.layoutProbeText = context.lineBreakText.length > 0 ? [self _paragraphLayoutProbeTextForNextContext:nextContext] : [NSMutableAttributedString new];
+        context.layoutTailText = [self _paragraphLayoutTailTextForContext:context nextContext:nextContext];
         _KKTextViewParagraphContext *oldContext = idx < oldContexts.count ? oldContexts[idx] : nil;
         if (reuseLayouts &&
             oldContext &&
             CGSizeEqualToSize(oldContext.layoutContainerSize, containerSize) &&
             NSEqualRanges(oldContext.lineBreakRange, context.lineBreakRange) &&
             [oldContext.text isEqualToAttributedString:context.text] &&
-            [oldContext.lineBreakText isEqualToAttributedString:context.lineBreakText] &&
-            [oldContext.layoutProbeText isEqualToAttributedString:context.layoutProbeText]) {
+            [oldContext.layoutTailText isEqualToAttributedString:context.layoutTailText]) {
             context.layout = oldContext.layout;
             context.contentView = oldContext.contentView;
         } else {
@@ -996,10 +1075,14 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
         CGContextClipToRect(context, (CGRect){CGPointZero, size});
         CGContextSetAlpha(context, KKTextViewSelectionAlpha);
         CGContextSetFillColorWithColor(context, NSColor.selectedTextBackgroundColor.CGColor);
+        CGMutablePathRef selectionPath = CGPathCreateMutable();
         for (KKTextSelectionRect *selectionRect in rects) {
             if (CGRectIsEmpty(selectionRect.rect) || CGRectIsNull(selectionRect.rect)) continue;
-            CGContextFillRect(context, selectionRect.rect);
+            CGPathAddRect(selectionPath, NULL, KKTextCGRectPixelCeil(selectionRect.rect));
         }
+        CGContextAddPath(context, selectionPath);
+        CGContextFillPath(context);
+        CGPathRelease(selectionPath);
     } CGContextRestoreGState(context);
 }
 

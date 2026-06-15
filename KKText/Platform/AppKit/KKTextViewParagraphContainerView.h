@@ -21,8 +21,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) NSRange lineBreakRange;
 @property (nonatomic) CGSize layoutContainerSize;
 @property (nonatomic, strong) NSMutableAttributedString *text;
-@property (nonatomic, strong) NSMutableAttributedString *lineBreakText;
-@property (nonatomic, strong) NSMutableAttributedString *layoutProbeText;
+@property (nonatomic, strong) NSMutableAttributedString *layoutTailText;
 @property (nullable, nonatomic, strong) KKTextLayout *layout;
 @property (nullable, nonatomic, strong) _KKTextViewParagraphContainerView *contentView;
 @end
