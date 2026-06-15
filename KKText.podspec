@@ -24,6 +24,7 @@ Pod::Spec.new do |s|
     'KKText/Platform/AppKit/NSValue+KKText.{h,m}',
     'KKText/Platform/AppKit/NSView+KKText.{h,m}',
     'KKText/Platform/AppKit/KKTextViewAppKit.m',
+    'KKText/Platform/AppKit/KKTextViewParagraphContainerView.{h,m}',
     'KKText/KKLabel.{h,m}',
     'KKText/String/**/*.{h,m}',
     'KKText/Component/KKTextDebugOption.{h,m}',
