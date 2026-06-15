@@ -18,8 +18,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface _KKTextViewParagraphContext : NSObject
 @property (nonatomic) NSRange range;
+@property (nonatomic) NSRange lineBreakRange;
 @property (nonatomic) CGSize layoutContainerSize;
 @property (nonatomic, strong) NSMutableAttributedString *text;
+@property (nonatomic, strong) NSMutableAttributedString *lineBreakText;
+@property (nonatomic, strong) NSMutableAttributedString *layoutProbeText;
 @property (nullable, nonatomic, strong) KKTextLayout *layout;
 @property (nullable, nonatomic, strong) _KKTextViewParagraphContainerView *contentView;
 @end
