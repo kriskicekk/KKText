@@ -83,6 +83,18 @@ KKText adds AppKit support while keeping the public API close to the original iO
 
 `KKTextView` supports paragraph-based layout and rendering on iOS and macOS. Text is split into paragraph content views, so normal editing can relayout and redraw only the affected paragraphs while preserving selection, caret, scrolling, IME marked text, and rich text copy/paste behavior.
 
+### KKTextView Benchmark
+
+The benchmark compares `YYTextView` from `https://github.com/ibireme/YYText.git` with `KKTextView` by running the same rich text editing operations on a Release build. Unit is `ms/op`, and lower is better.
+
+![100 characters benchmark](Benchmark/KKBenchTextView/Images/kkbench_textview_100.svg)
+
+![1,000 characters benchmark](Benchmark/KKBenchTextView/Images/kkbench_textview_1000.svg)
+
+![10,000 characters benchmark](Benchmark/KKBenchTextView/Images/kkbench_textview_10000.svg)
+
+Partial refresh becomes more useful as the text grows. In a large document, a small edit usually affects only one paragraph and the ranges of paragraphs after it. `KKTextView` keeps paragraph layout and drawing isolated, so unchanged paragraphs can keep their existing layout results and avoid full text relayout. This reduces Core Text layout work, view invalidation, and redraw cost for common editing operations such as insert, append, and delete. On short text the fixed overhead can hide the benefit, but with 10,000 characters the cost of whole-document layout dominates, so paragraph-based refresh shows a much clearer advantage.
+
 ## Features
 
 - Asynchronous text layout and rendering.

@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="560" viewBox="0 0 980 560">
+  <style>
+    .title { font: 700 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #111827; }
+    .sub { font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #6b7280; }
+    .label { font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #374151; }
+    .value { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #111827; }
+    .axis { stroke: #d1d5db; stroke-width: 1; }
+    .grid { stroke: #e5e7eb; stroke-width: 1; }
+    .yy { fill: #64748b; }
+    .kk { fill: #16a34a; }
+    .legend { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #374151; }
+  </style>
+  <rect width="980" height="560" fill="#ffffff"/>
+  <text x="40" y="48" class="title">TextView Benchmark - 1,000 Characters</text>
+  <text x="40" y="74" class="sub">Unit: ms/op. Lower is better.</text>
+
+  <rect x="710" y="38" width="14" height="14" rx="3" class="yy"/>
+  <text x="730" y="50" class="legend">YYTextView</text>
+  <rect x="820" y="38" width="14" height="14" rx="3" class="kk"/>
+  <text x="840" y="50" class="legend">KKTextView</text>
+
+  <line x1="300" y1="96" x2="300" y2="510" class="axis"/>
+  <line x1="440" y1="96" x2="440" y2="510" class="grid"/>
+  <line x1="580" y1="96" x2="580" y2="510" class="grid"/>
+  <line x1="720" y1="96" x2="720" y2="510" class="grid"/>
+  <line x1="860" y1="96" x2="860" y2="510" class="grid"/>
+  <text x="296" y="530" text-anchor="middle" class="sub">0</text>
+  <text x="440" y="530" text-anchor="middle" class="sub">0.4</text>
+  <text x="580" y="530" text-anchor="middle" class="sub">0.8</text>
+  <text x="720" y="530" text-anchor="middle" class="sub">1.2</text>
+  <text x="860" y="530" text-anchor="middle" class="sub">1.6</text>
+
+  <text x="40" y="124" class="label">set attributedText</text>
+  <rect x="300" y="104" width="549" height="14" rx="4" class="yy"/>
+  <rect x="300" y="124" width="286" height="14" rx="4" class="kk"/>
+  <text x="861" y="116" class="value">YY 1.569</text>
+  <text x="598" y="136" class="value">KK 0.816</text>
+
+  <text x="40" y="180" class="label">insert beginning x30</text>
+  <rect x="300" y="160" width="209" height="14" rx="4" class="yy"/>
+  <rect x="300" y="180" width="224" height="14" rx="4" class="kk"/>
+  <text x="521" y="172" class="value">YY 0.596</text>
+  <text x="536" y="192" class="value">KK 0.639</text>
+
+  <text x="40" y="236" class="label">insert middle x30</text>
+  <rect x="300" y="216" width="189" height="14" rx="4" class="yy"/>
+  <rect x="300" y="236" width="203" height="14" rx="4" class="kk"/>
+  <text x="501" y="228" class="value">YY 0.541</text>
+  <text x="515" y="248" class="value">KK 0.579</text>
+
+  <text x="40" y="292" class="label">append x30</text>
+  <rect x="300" y="272" width="187" height="14" rx="4" class="yy"/>
+  <rect x="300" y="292" width="201" height="14" rx="4" class="kk"/>
+  <text x="499" y="284" class="value">YY 0.534</text>
+  <text x="513" y="304" class="value">KK 0.573</text>
+
+  <text x="40" y="348" class="label">delete backward x30</text>
+  <rect x="300" y="328" width="204" height="14" rx="4" class="yy"/>
+  <rect x="300" y="348" width="2" height="14" rx="1" class="kk"/>
+  <text x="516" y="340" class="value">YY 0.582</text>
+  <text x="314" y="360" class="value">KK 0.006</text>
+
+  <text x="40" y="404" class="label">selection x100</text>
+  <rect x="300" y="384" width="21" height="14" rx="4" class="yy"/>
+  <rect x="300" y="404" width="21" height="14" rx="4" class="kk"/>
+  <text x="333" y="396" class="value">YY 0.059</text>
+  <text x="333" y="416" class="value">KK 0.059</text>
+
+  <text x="40" y="460" class="label">scrollRangeToVisible x80</text>
+  <rect x="300" y="440" width="4" height="14" rx="2" class="yy"/>
+  <rect x="300" y="460" width="3" height="14" rx="2" class="kk"/>
+  <text x="316" y="452" class="value">YY 0.012</text>
+  <text x="315" y="472" class="value">KK 0.008</text>
+</svg>
