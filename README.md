@@ -79,6 +79,10 @@ The comparison below shows the vertical truncation line rendering difference bet
 
 KKText adds AppKit support while keeping the public API close to the original iOS usage. The macOS implementation maps common UIKit-style types through `KKTextPlatform.h`, supports `KKLabel` rendering and interaction, and provides a native `KKTextView` path for text input, selection, scrolling, context menu actions, and rich text copy/paste.
 
+### Partial Refresh for KKTextView
+
+`KKTextView` supports paragraph-based layout and rendering on iOS and macOS. Text is split into paragraph content views, so normal editing can relayout and redraw only the affected paragraphs while preserving selection, caret, scrolling, IME marked text, and rich text copy/paste behavior.
+
 ## Features
 
 - Asynchronous text layout and rendering.
