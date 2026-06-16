@@ -171,8 +171,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nullable, nonatomic, strong) id<KKTextParser> textParser;
 
 /**
- The current text layout in text view (readonly).
- It can be used to query the text layout information.
+ The current global text layout in text view (readonly).
+ It is nil when the text view is rendered by paragraph layouts.
  */
 @property (nullable, nonatomic, strong, readonly) KKTextLayout *textLayout;
 

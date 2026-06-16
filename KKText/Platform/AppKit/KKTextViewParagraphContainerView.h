@@ -28,7 +28,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface _KKTextViewParagraphContainerView : NSView
 @property (nullable, nonatomic, weak) KKTextView *textView;
-@property (nullable, nonatomic, strong) _KKTextViewParagraphContext *paragraphContext;
+@property (nullable, nonatomic, weak) _KKTextViewParagraphContext *paragraphContext;
 @end
 
 @interface KKTextView (KKTextViewParagraphContainerView)

@@ -95,6 +95,9 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     NSMutableArray<_KKTextViewUndoState *> *_undoStack;
     NSMutableArray<_KKTextViewUndoState *> *_redoStack;
     NSTimer *_caretBlinkTimer;
+    NSRange _pendingParagraphEditNewRange;
+    NSInteger _pendingParagraphEditDelta;
+    BOOL _hasPendingParagraphEdit;
     BOOL _caretVisible;
     BOOL _caretActive;
     BOOL _trackingSelection;
@@ -420,6 +423,45 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
 - (KKTextLayout *)_layoutForParagraphContext:(_KKTextViewParagraphContext *)context containerSize:(CGSize)containerSize {
     KKTextContainer *container = [self _paragraphContainerWithSize:containerSize];
     return [KKTextLayout layoutWithContainer:container text:[self _layoutTextForParagraphContext:context]];
+}
+
+- (void)_recordParagraphEditRange:(NSRange)range replacementLength:(NSUInteger)replacementLength {
+    _pendingParagraphEditNewRange = NSMakeRange(range.location, replacementLength);
+    _pendingParagraphEditDelta = (NSInteger)replacementLength - (NSInteger)range.length;
+    _hasPendingParagraphEdit = YES;
+}
+
+- (void)_clearParagraphEditRecord {
+    _pendingParagraphEditNewRange = NSMakeRange(0, 0);
+    _pendingParagraphEditDelta = 0;
+    _hasPendingParagraphEdit = NO;
+}
+
+- (NSUInteger)_oldParagraphLocationForCurrentRange:(NSRange)range {
+    if (!_hasPendingParagraphEdit) return range.location;
+    if (range.location >= NSMaxRange(_pendingParagraphEditNewRange)) {
+        NSInteger oldLocation = (NSInteger)range.location - _pendingParagraphEditDelta;
+        return oldLocation > 0 ? (NSUInteger)oldLocation : 0;
+    }
+    return range.location;
+}
+
+- (_KKTextViewParagraphContext *)_oldParagraphContextForCurrentContext:(_KKTextViewParagraphContext *)context oldContexts:(NSArray<_KKTextViewParagraphContext *> *)oldContexts index:(NSUInteger)index {
+    if (_hasPendingParagraphEdit) {
+        NSUInteger oldLocation = [self _oldParagraphLocationForCurrentRange:context.range];
+        for (_KKTextViewParagraphContext *oldContext in oldContexts) {
+            if (oldContext.range.location == oldLocation) return oldContext;
+        }
+    }
+    return index < oldContexts.count ? oldContexts[index] : nil;
+}
+
+- (BOOL)_paragraphContext:(_KKTextViewParagraphContext *)context canReuseLayoutFromContext:(_KKTextViewParagraphContext *)oldContext containerSize:(CGSize)containerSize {
+    if (!oldContext.layout) return NO;
+    if (!CGSizeEqualToSize(oldContext.layoutContainerSize, containerSize)) return NO;
+    if (![oldContext.text isEqualToAttributedString:context.text]) return NO;
+    if (![oldContext.layoutTailText isEqualToAttributedString:context.layoutTailText]) return NO;
+    return YES;
 }
 
 - (_KKTextViewParagraphContext *)_paragraphContextForLocation:(NSUInteger)location {
@@ -802,11 +844,6 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     return rects;
 }
 
-- (CGFloat)_paragraphOriginYForContext:(_KKTextViewParagraphContext *)context fallback:(CGFloat)fallback {
-    (void)context;
-    return fallback;
-}
-
 - (NSArray<KKTextSelectionRect *> *)_selectionRectsForRange:(NSRange)range {
     range = KKTextViewMakeSafeRange(range, _innerText.length);
     if (range.length == 0) return @[];
@@ -875,6 +912,7 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
         [_paragraphContexts removeAllObjects];
         _paragraphContentSize = CGSizeZero;
         [self _updateSelectionFrame];
+        [self _clearParagraphEditRecord];
         return;
     }
 
@@ -882,6 +920,7 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     NSArray<NSValue *> *ranges = [self _paragraphContentRanges];
     NSMutableArray<_KKTextViewParagraphContext *> *contexts = [NSMutableArray arrayWithCapacity:ranges.count];
     NSMutableSet<_KKTextViewParagraphContainerView *> *activeViews = [NSMutableSet set];
+    NSMutableSet<_KKTextViewParagraphContext *> *reusedOldContexts = [NSMutableSet set];
     CGSize containerSize = [self _paragraphLayoutContainerSize];
     CGFloat width = [self _visibleSize].width;
     CGFloat fallbackY = _textContainerInset.top;
@@ -896,15 +935,13 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
         _KKTextViewParagraphContext *context = contexts[idx];
         _KKTextViewParagraphContext *nextContext = idx + 1 < contexts.count ? contexts[idx + 1] : nil;
         context.layoutTailText = [self _paragraphLayoutTailTextForContext:context nextContext:nextContext];
-        _KKTextViewParagraphContext *oldContext = idx < oldContexts.count ? oldContexts[idx] : nil;
+        _KKTextViewParagraphContext *oldContext = [self _oldParagraphContextForCurrentContext:context oldContexts:oldContexts index:idx];
+        if (oldContext && [reusedOldContexts containsObject:oldContext]) oldContext = nil;
         if (reuseLayouts &&
-            oldContext &&
-            CGSizeEqualToSize(oldContext.layoutContainerSize, containerSize) &&
-            NSEqualRanges(oldContext.lineBreakRange, context.lineBreakRange) &&
-            [oldContext.text isEqualToAttributedString:context.text] &&
-            [oldContext.layoutTailText isEqualToAttributedString:context.layoutTailText]) {
+            [self _paragraphContext:context canReuseLayoutFromContext:oldContext containerSize:containerSize]) {
             context.layout = oldContext.layout;
             context.contentView = oldContext.contentView;
+            [reusedOldContexts addObject:oldContext];
         } else {
             context.layout = [self _layoutForParagraphContext:context containerSize:containerSize];
         }
@@ -922,12 +959,11 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
 
     for (NSUInteger idx = 0; idx < contexts.count; idx++) {
         _KKTextViewParagraphContext *context = contexts[idx];
-        CGFloat y = [self _paragraphOriginYForContext:context fallback:fallbackY];
         _KKTextViewParagraphContext *nextContext = idx + 1 < contexts.count ? contexts[idx + 1] : nil;
         CGFloat height = [self _paragraphHeightForContext:context nextContext:nextContext boundsSize:CGSizeMake(width, 0)];
-        context.contentView.frame = (NSRect){CGPointMake(0, y), CGSizeMake(width, height)};
+        context.contentView.frame = (NSRect){CGPointMake(0, fallbackY), CGSizeMake(width, height)};
         [context.contentView setNeedsDisplay:YES];
-        fallbackY = y + height;
+        fallbackY += height;
     }
 
     for (_KKTextViewParagraphContext *oldContext in oldContexts) {
@@ -939,6 +975,7 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     _paragraphContexts = contexts;
     _paragraphContentSize = CGSizeMake(width, fallbackY + _textContainerInset.bottom);
     [self _updateSelectionFrame];
+    [self _clearParagraphEditRecord];
 }
 
 - (CGSize)_layoutContainerSize {
@@ -1305,6 +1342,7 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     if (notify) {
         [self _recordUndoBeforeEditing];
     }
+    [self _recordParagraphEditRange:range replacementLength:attributedString.length];
     [_innerText replaceCharactersInRange:range withAttributedString:attributedString ?: [NSAttributedString new]];
     _selectedRange = NSMakeRange(range.location + attributedString.length, 0);
     _markedRange = NSMakeRange(NSNotFound, 0);
@@ -2310,6 +2348,7 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     if (startsMarkedText) {
         [self _recordUndoBeforeEditing];
     }
+    [self _recordParagraphEditRange:replaceRange replacementLength:markedText.length];
     [_innerText replaceCharactersInRange:replaceRange withAttributedString:markedText];
     _markedRange = NSMakeRange(replaceRange.location, markedText.length);
     _selectedRange = NSMakeRange(_markedRange.location + selectedRange.location, selectedRange.length);

@@ -12,7 +12,13 @@ Pod::Spec.new do |s|
   
   s.requires_arc = true
   s.ios.source_files = 'KKText/**/*.{h,m}'
-  s.ios.public_header_files = 'KKText/**/*.{h}'
+  s.ios.exclude_files = 'KKText/Platform/AppKit/**/*'
+  s.ios.public_header_files = [
+    'KKText/*.h',
+    'KKText/String/**/*.h',
+    'KKText/Component/**/*.h',
+    'KKText/Utility/**/*.h'
+  ]
   s.ios.frameworks = 'UIKit', 'CoreFoundation','CoreText', 'QuartzCore', 'Accelerate', 'MobileCoreServices'
 
   s.osx.source_files = [

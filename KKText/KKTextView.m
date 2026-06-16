@@ -71,6 +71,13 @@ static double _KKDeviceSystemVersion(void) {
 #define kDefaultInset UIEdgeInsetsMake(6, 4, 6, 4)
 #define kDefaultVerticalInset UIEdgeInsetsMake(4, 6, 4, 6)
 
+static NSRange KKTextViewMakeSafeRange(NSRange range, NSUInteger length) {
+    if (range.location == NSNotFound) return NSMakeRange(length, 0);
+    if (range.location > length) range.location = length;
+    if (range.length > length - range.location) range.length = length - range.location;
+    return range;
+}
+
 
 NSString *const KKTextViewTextDidBeginEditingNotification = @"KKTextViewTextDidBeginEditing";
 NSString *const KKTextViewTextDidChangeNotification = @"KKTextViewTextDidChange";
@@ -104,6 +111,27 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
 }
 @end
 
+@class _KKTextViewParagraphContext;
+
+typedef NS_ENUM(NSUInteger, _KKTextViewSelectionRectMode) {
+    _KKTextViewSelectionRectModeAll,
+    _KKTextViewSelectionRectModeWithoutStartAndEnd,
+    _KKTextViewSelectionRectModeOnlyStartAndEnd,
+};
+
+@interface _KKTextViewParagraphContext : NSObject
+@property (nonatomic) NSRange range;
+@property (nonatomic) NSRange lineBreakRange;
+@property (nonatomic) CGSize layoutContainerSize;
+@property (nonatomic, strong) NSMutableAttributedString *text;
+@property (nonatomic, strong) NSMutableAttributedString *layoutTailText;
+@property (nullable, nonatomic, strong) KKTextLayout *layout;
+@property (nullable, nonatomic, strong) KKTextContainerView *contentView;
+@end
+
+@implementation _KKTextViewParagraphContext
+@end
+
 
 @interface KKTextView () <UIScrollViewDelegate, UIAlertViewDelegate, KKTextDebugTarget, KKTextKeyboardObserver> {
     
@@ -117,7 +145,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     NSMutableAttributedString *_innerText; ///< nonnull, inner attributed text
     NSMutableAttributedString *_delectedText; ///< detected text for display
     KKTextContainer *_innerContainer; ///< nonnull, inner text container
-    KKTextLayout *_innerLayout; ///< inner text layout, the text in this layout is longer than `_innerText` by appending '\n'
+    NSMutableArray<_KKTextViewParagraphContext *> *_paragraphContexts; ///< paragraph text layouts
     
     KKTextContainerView *_containerView; ///< nonnull
     KKTextSelectionView *_selectionView; ///< nonnull
@@ -130,8 +158,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     
     NSRange _highlightRange; ///< current highlight range
     KKTextHighlight *_highlight; ///< highlight attribute in `_highlightRange`
-    KKTextLayout *_highlightLayout; ///< when _state.showingHighlight=YES, this layout should be displayed
-    KKTextRange *_trackingRange; ///< the range in _innerLayout, may out of _innerText.
+    KKTextRange *_trackingRange; ///< the tracking range, may out of _innerText.
     
     BOOL _insetModifiedByKeyboard; ///< text is covered by keyboard, and the contentInset is modified
     UIEdgeInsets _originalContentInset; ///< the original contentInset before modified
@@ -152,6 +179,9 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     NSMutableArray *_undoStack;
     NSMutableArray *_redoStack;
     NSRange _lastTypeRange;
+    NSRange _pendingParagraphEditNewRange;
+    NSInteger _pendingParagraphEditDelta;
+    BOOL _hasPendingParagraphEdit;
     
     struct {
         unsigned int trackingGrabber : 2;       ///< KKTextGrabberDirection, current tracking grabber
@@ -243,34 +273,11 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     } else {
         _delectedText = nil;
     }
-    [text replaceCharactersInRange:NSMakeRange(text.length, 0) withString:@"\r"]; // add for nextline caret
-    [text kk_removeDiscontinuousAttributesInRange:NSMakeRange(_innerText.length, 1)];
-    [text removeAttribute:KKTextBorderAttributeName range:NSMakeRange(_innerText.length, 1)];
-    [text removeAttribute:KKTextBackgroundBorderAttributeName range:NSMakeRange(_innerText.length, 1)];
-    if (_innerText.length == 0) {
-        [text kk_setAttributes:_typingAttributesHolder.kk_attributes]; // add for empty text caret
-    }
-    if (_selectedTextRange.end.offset == _innerText.length) {
-        [_typingAttributesHolder.kk_attributes enumerateKeysAndObjectsUsingBlock:^(NSString *key, id value, BOOL *stop) {
-            [text kk_setAttribute:key value:value range:NSMakeRange(_innerText.length, 1)];
-        }];
-    }
-    [self willChangeValueForKey:@"textLayout"];
-    _innerLayout = [KKTextLayout layoutWithContainer:_innerContainer text:text];
-    [self didChangeValueForKey:@"textLayout"];
-    CGSize size = [_innerLayout textBoundingSize];
-    CGSize visibleSize = [self _getVisibleSize];
-    if (_innerContainer.isVerticalForm) {
-        size.height = visibleSize.height;
-        if (size.width < visibleSize.width) size.width = visibleSize.width;
-    } else {
-        size.width = visibleSize.width;
-    }
-    
-    [_containerView setLayout:_innerLayout withFadeDuration:0];
-    _containerView.frame = (CGRect){.size = size};
     _state.showingHighlight = NO;
-    self.contentSize = size;
+    [self willChangeValueForKey:@"textLayout"];
+    [_containerView setLayout:nil withFadeDuration:0];
+    [self _updateParagraphContainerViewsReusingLayouts:YES];
+    [self didChangeValueForKey:@"textLayout"];
 }
 
 /// Update selection view immediately.
@@ -281,7 +288,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     _selectionView.caretVisible = NO;
     _selectionView.selectionRects = nil;
     [[KKTextEffectWindow sharedWindow] hideSelectionDot:_selectionView];
-    if (!_innerLayout) return;
+    if (_paragraphContexts.count == 0) return;
     
     NSMutableArray *allRects = [NSMutableArray new];
     BOOL containsDot = NO;
@@ -292,23 +299,23 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     }
     
     if (_markedTextRange) {
-        NSArray *rects = [_innerLayout selectionRectsWithoutStartAndEndForRange:_markedTextRange];
+        NSArray *rects = [self _selectionRectsWithoutStartAndEndForTextRange:_markedTextRange];
         if (rects) [allRects addObjectsFromArray:rects];
         if (selectedRange.asRange.length > 0) {
-            rects = [_innerLayout selectionRectsWithOnlyStartAndEndForRange:selectedRange];
+            rects = [self _selectionRectsWithOnlyStartAndEndForTextRange:selectedRange];
             if (rects) [allRects addObjectsFromArray:rects];
             containsDot = rects.count > 0;
         } else {
-            CGRect rect = [_innerLayout caretRectForPosition:selectedRange.end];
-            _selectionView.caretRect = [self _convertRectFromLayout:rect];
+            CGRect rect = [self _caretRectForTextPosition:selectedRange.end];
+            _selectionView.caretRect = rect;
             _selectionView.caretVisible = YES;
             _selectionView.caretBlinks = YES;
         }
     } else {
         if (selectedRange.asRange.length == 0) { // only caret
             if (self.isFirstResponder || _state.trackingPreSelect) {
-                CGRect rect = [_innerLayout caretRectForPosition:selectedRange.end];
-                _selectionView.caretRect = [self _convertRectFromLayout:rect];
+                CGRect rect = [self _caretRectForTextPosition:selectedRange.end];
+                _selectionView.caretRect = rect;
                 _selectionView.caretVisible = YES;
                 if (!_state.trackingCaret && !_state.trackingPreSelect) {
                     _selectionView.caretBlinks = YES;
@@ -317,19 +324,16 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
         } else { // range selected
             if ((self.isFirstResponder && !_state.deleteConfirm) ||
                 (!self.isFirstResponder && _state.selectedWithoutEdit)) {
-                NSArray *rects = [_innerLayout selectionRectsForRange:selectedRange];
+                NSArray *rects = [self _selectionRectsForTextRange:selectedRange];
                 if (rects) [allRects addObjectsFromArray:rects];
                 containsDot = rects.count > 0;
             } else if ((!self.isFirstResponder && _state.trackingPreSelect) ||
                        (self.isFirstResponder && _state.deleteConfirm)){
-                NSArray *rects = [_innerLayout selectionRectsWithoutStartAndEndForRange:selectedRange];
+                NSArray *rects = [self _selectionRectsWithoutStartAndEndForTextRange:selectedRange];
                 if (rects) [allRects addObjectsFromArray:rects];
             }
         }
     }
-    [allRects enumerateObjectsUsingBlock:^(KKTextSelectionRect *rect, NSUInteger idx, BOOL *stop) {
-        rect.rect = [self _convertRectFromLayout:rect.rect];
-    }];
     _selectionView.selectionRects = allRects;
     if (!_state.firstShowDot && containsDot) {
         _state.firstShowDot = YES;
@@ -356,6 +360,856 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     if (_innerContainer.isVerticalForm) size.width = CGFLOAT_MAX;
     else size.height = CGFLOAT_MAX;
     _innerContainer.size = size;
+}
+
+- (NSAttributedString *)_paragraphDisplayText {
+    NSMutableAttributedString *text = (_delectedText ? _delectedText : _innerText).mutableCopy;
+    if (_state.showingHighlight && _highlight && _highlightRange.location != NSNotFound) {
+        NSRange range = KKTextViewMakeSafeRange(_highlightRange, text.length);
+        if (range.length > 0) {
+            [_highlight.attributes enumerateKeysAndObjectsUsingBlock:^(NSString *key, id value, BOOL *stop) {
+                [text kk_setAttribute:key value:value range:range];
+            }];
+        }
+    }
+    return text;
+}
+
+- (NSArray<NSValue *> *)_paragraphContentRanges {
+    NSMutableArray<NSValue *> *ranges = [NSMutableArray array];
+    NSString *string = _innerText.string;
+    NSUInteger length = string.length;
+    if (_verticalForm || _exclusionPaths.count > 0) {
+        [ranges addObject:[NSValue valueWithRange:NSMakeRange(0, length)]];
+        return ranges;
+    }
+
+    NSUInteger location = 0;
+    while (location < length) {
+        NSUInteger start = location;
+        while (location < length && !KKTextIsLinebreakChar([string characterAtIndex:location])) {
+            location++;
+        }
+        [ranges addObject:[NSValue valueWithRange:NSMakeRange(start, location - start)]];
+        if (location < length) {
+            unichar c = [string characterAtIndex:location];
+            location++;
+            if (c == '\r' && location < length && [string characterAtIndex:location] == '\n') {
+                location++;
+            }
+        }
+    }
+    if (length == 0 || KKTextLinebreakTailLength(string) > 0) {
+        [ranges addObject:[NSValue valueWithRange:NSMakeRange(length, 0)]];
+    }
+    return ranges;
+}
+
+- (CGSize)_paragraphLayoutContainerSize {
+    CGSize size = [self _getVisibleSize];
+    if (_verticalForm) size.width = CGFLOAT_MAX;
+    else size.height = CGFLOAT_MAX;
+    return size;
+}
+
+- (KKTextContainer *)_paragraphContainerWithSize:(CGSize)size {
+    KKTextContainer *container = _innerContainer.copy;
+    container.size = size;
+    if (!_verticalForm && _exclusionPaths.count == 0) {
+        container.insets = UIEdgeInsetsMake(0, _textContainerInset.left, 0, _textContainerInset.right);
+        container.exclusionPaths = nil;
+    }
+    container.verticalForm = _verticalForm;
+    container.linePositionModifier = _linePositionModifier;
+    return container;
+}
+
+- (void)_applyHiddenLayoutAttributesToText:(NSMutableAttributedString *)text {
+    if (text.length == 0) return;
+    NSRange range = NSMakeRange(0, text.length);
+    [text kk_removeDiscontinuousAttributesInRange:range];
+    [text removeAttribute:KKTextBorderAttributeName range:range];
+    [text removeAttribute:KKTextBackgroundBorderAttributeName range:range];
+    UIColor *clearColor = UIColor.clearColor;
+    [text kk_setAttribute:NSForegroundColorAttributeName value:clearColor range:range];
+    [text kk_setAttribute:(id)kCTForegroundColorAttributeName value:(id)clearColor.CGColor range:range];
+}
+
+- (NSMutableAttributedString *)_hiddenLayoutTextWithAttributedString:(NSAttributedString *)text {
+    NSMutableAttributedString *hiddenText = text.mutableCopy ?: [NSMutableAttributedString new];
+    [self _applyHiddenLayoutAttributesToText:hiddenText];
+    return hiddenText;
+}
+
+- (_KKTextViewParagraphContext *)_paragraphContextWithRange:(NSRange)range displayText:(NSAttributedString *)displayText {
+    _KKTextViewParagraphContext *context = [_KKTextViewParagraphContext new];
+    context.range = KKTextViewMakeSafeRange(range, _innerText.length);
+    if (context.range.length > 0) {
+        context.text = [[displayText attributedSubstringFromRange:context.range] mutableCopy];
+    } else {
+        context.text = [NSMutableAttributedString new];
+    }
+
+    NSUInteger lineBreakLocation = NSMaxRange(context.range);
+    NSUInteger lineBreakLength = 0;
+    if (!_verticalForm && _exclusionPaths.count == 0 && lineBreakLocation < _innerText.length) {
+        unichar c = [_innerText.string characterAtIndex:lineBreakLocation];
+        if (KKTextIsLinebreakChar(c)) {
+            lineBreakLength = 1;
+            if (c == '\r' &&
+                lineBreakLocation + 1 < _innerText.length &&
+                [_innerText.string characterAtIndex:lineBreakLocation + 1] == '\n') {
+                lineBreakLength = 2;
+            }
+        }
+    }
+    context.lineBreakRange = NSMakeRange(lineBreakLocation, lineBreakLength);
+    context.layoutTailText = [NSMutableAttributedString new];
+    return context;
+}
+
+- (NSDictionary *)_paragraphDefaultTypingAttributes {
+    NSMutableDictionary *attributes = [_typingAttributesHolder.kk_attributes mutableCopy];
+    if (!attributes) attributes = [NSMutableDictionary dictionary];
+    if (!attributes[NSFontAttributeName] && !attributes[(id)kCTFontAttributeName]) {
+        UIFont *font = _font ?: [self _defaultFont];
+        attributes[NSFontAttributeName] = font;
+        attributes[(id)kCTFontAttributeName] = font;
+    }
+    if (!attributes[NSForegroundColorAttributeName] && !attributes[(id)kCTForegroundColorAttributeName]) {
+        UIColor *color = _textColor ?: UIColor.blackColor;
+        attributes[NSForegroundColorAttributeName] = color;
+        attributes[(id)kCTForegroundColorAttributeName] = (id)color.CGColor;
+    }
+    return attributes;
+}
+
+- (NSDictionary *)_paragraphSentinelAttributesForContext:(_KKTextViewParagraphContext *)context {
+    NSMutableDictionary *attributes = nil;
+    if (context.text.length > 0) {
+        attributes = [[context.text kk_attributesAtIndex:context.text.length - 1] mutableCopy];
+    } else {
+        attributes = [_typingAttributesHolder.kk_attributes mutableCopy];
+    }
+    if (!attributes) attributes = [[self _paragraphDefaultTypingAttributes] mutableCopy];
+    [attributes removeObjectsForKeys:[NSMutableAttributedString kk_allDiscontinuousAttributeKeys]];
+    [attributes removeObjectForKey:KKTextBorderAttributeName];
+    [attributes removeObjectForKey:KKTextBackgroundBorderAttributeName];
+    UIColor *clearColor = UIColor.clearColor;
+    attributes[NSForegroundColorAttributeName] = clearColor;
+    attributes[(id)kCTForegroundColorAttributeName] = (id)clearColor.CGColor;
+    return attributes;
+}
+
+- (NSDictionary *)_paragraphProbeAttributesForContext:(_KKTextViewParagraphContext *)context displayText:(NSAttributedString *)displayText {
+    NSMutableDictionary *attributes = nil;
+    if (context.text.length > 0) {
+        attributes = [[context.text kk_attributesAtIndex:0] mutableCopy];
+    } else if (context.range.location < displayText.length) {
+        attributes = [[displayText kk_attributesAtIndex:context.range.location] mutableCopy];
+    } else {
+        attributes = [_typingAttributesHolder.kk_attributes mutableCopy];
+    }
+    if (!attributes) attributes = [[self _paragraphDefaultTypingAttributes] mutableCopy];
+    [attributes removeObjectsForKeys:[NSMutableAttributedString kk_allDiscontinuousAttributeKeys]];
+    [attributes removeObjectForKey:KKTextBorderAttributeName];
+    [attributes removeObjectForKey:KKTextBackgroundBorderAttributeName];
+    UIColor *clearColor = UIColor.clearColor;
+    attributes[NSForegroundColorAttributeName] = clearColor;
+    attributes[(id)kCTForegroundColorAttributeName] = (id)clearColor.CGColor;
+    return attributes;
+}
+
+- (NSMutableAttributedString *)_paragraphLayoutProbeTextForNextContext:(_KKTextViewParagraphContext *)nextContext displayText:(NSAttributedString *)displayText {
+    if (!nextContext) return [NSMutableAttributedString new];
+    NSDictionary *attributes = [self _paragraphProbeAttributesForContext:nextContext displayText:displayText];
+    return [[NSMutableAttributedString alloc] initWithString:@"\u200B" attributes:attributes];
+}
+
+- (NSMutableAttributedString *)_paragraphLayoutTailTextForContext:(_KKTextViewParagraphContext *)context nextContext:(_KKTextViewParagraphContext *)nextContext displayText:(NSAttributedString *)displayText {
+    NSMutableAttributedString *tailText = [NSMutableAttributedString new];
+    if (context.lineBreakRange.length > 0) {
+        NSAttributedString *lineBreakSource = [displayText attributedSubstringFromRange:context.lineBreakRange];
+        [tailText appendAttributedString:[self _hiddenLayoutTextWithAttributedString:lineBreakSource]];
+        [tailText appendAttributedString:[self _paragraphLayoutProbeTextForNextContext:nextContext displayText:displayText]];
+    } else {
+        NSDictionary *attributes = [self _paragraphSentinelAttributesForContext:context];
+        NSAttributedString *sentinel = [[NSAttributedString alloc] initWithString:@"\r" attributes:attributes];
+        [tailText appendAttributedString:sentinel];
+    }
+    return tailText;
+}
+
+- (NSMutableAttributedString *)_layoutTextForParagraphContext:(_KKTextViewParagraphContext *)context {
+    NSMutableAttributedString *layoutText = context.text.mutableCopy ?: [NSMutableAttributedString new];
+    [layoutText appendAttributedString:context.layoutTailText ?: [NSMutableAttributedString new]];
+    return layoutText;
+}
+
+- (KKTextLayout *)_layoutForParagraphContext:(_KKTextViewParagraphContext *)context containerSize:(CGSize)containerSize {
+    KKTextContainer *container = [self _paragraphContainerWithSize:containerSize];
+    return [KKTextLayout layoutWithContainer:container text:[self _layoutTextForParagraphContext:context]];
+}
+
+- (void)_recordParagraphEditRange:(NSRange)range replacementLength:(NSUInteger)replacementLength {
+    _pendingParagraphEditNewRange = NSMakeRange(range.location, replacementLength);
+    _pendingParagraphEditDelta = (NSInteger)replacementLength - (NSInteger)range.length;
+    _hasPendingParagraphEdit = YES;
+}
+
+- (void)_clearParagraphEditRecord {
+    _pendingParagraphEditNewRange = NSMakeRange(0, 0);
+    _pendingParagraphEditDelta = 0;
+    _hasPendingParagraphEdit = NO;
+}
+
+- (NSUInteger)_oldParagraphLocationForCurrentRange:(NSRange)range {
+    if (!_hasPendingParagraphEdit) return range.location;
+    if (range.location >= NSMaxRange(_pendingParagraphEditNewRange)) {
+        NSInteger oldLocation = (NSInteger)range.location - _pendingParagraphEditDelta;
+        return oldLocation > 0 ? (NSUInteger)oldLocation : 0;
+    }
+    return range.location;
+}
+
+- (_KKTextViewParagraphContext *)_oldParagraphContextForCurrentContext:(_KKTextViewParagraphContext *)context oldContexts:(NSArray<_KKTextViewParagraphContext *> *)oldContexts index:(NSUInteger)index {
+    if (_hasPendingParagraphEdit) {
+        NSUInteger oldLocation = [self _oldParagraphLocationForCurrentRange:context.range];
+        for (_KKTextViewParagraphContext *oldContext in oldContexts) {
+            if (oldContext.range.location == oldLocation) return oldContext;
+        }
+    }
+    return index < oldContexts.count ? oldContexts[index] : nil;
+}
+
+- (BOOL)_paragraphContext:(_KKTextViewParagraphContext *)context canReuseLayoutFromContext:(_KKTextViewParagraphContext *)oldContext containerSize:(CGSize)containerSize {
+    if (!oldContext.layout) return NO;
+    if (!CGSizeEqualToSize(oldContext.layoutContainerSize, containerSize)) return NO;
+    if (![oldContext.text isEqualToAttributedString:context.text]) return NO;
+    if (![oldContext.layoutTailText isEqualToAttributedString:context.layoutTailText]) return NO;
+    return YES;
+}
+
+- (_KKTextViewParagraphContext *)_paragraphContextForLocation:(NSUInteger)location {
+    if (_paragraphContexts.count == 0) return nil;
+    location = MIN(location, _innerText.length);
+    for (_KKTextViewParagraphContext *context in _paragraphContexts) {
+        NSUInteger start = context.range.location;
+        NSUInteger end = NSMaxRange(context.range);
+        if (context.range.length == 0) {
+            if (location == start) return context;
+        } else if (start <= location && location <= end) {
+            return context;
+        }
+    }
+    return location <= _paragraphContexts.firstObject.range.location ? _paragraphContexts.firstObject : _paragraphContexts.lastObject;
+}
+
+- (_KKTextViewParagraphContext *)_paragraphContextForDocumentPoint:(CGPoint)point {
+    if (_paragraphContexts.count == 0) return nil;
+    for (_KKTextViewParagraphContext *context in _paragraphContexts) {
+        if (CGRectContainsPoint(context.contentView.frame, point)) return context;
+    }
+    if (_verticalForm) {
+        if (point.x <= CGRectGetMinX(_paragraphContexts.firstObject.contentView.frame)) return _paragraphContexts.firstObject;
+    } else if (point.y <= CGRectGetMinY(_paragraphContexts.firstObject.contentView.frame)) {
+        return _paragraphContexts.firstObject;
+    }
+    return _paragraphContexts.lastObject;
+}
+
+- (NSUInteger)_localLocationForGlobalLocation:(NSUInteger)location inParagraphContext:(_KKTextViewParagraphContext *)context {
+    if (!context) return 0;
+    if (location <= context.range.location) return 0;
+    return MIN(location - context.range.location, context.text.length);
+}
+
+- (NSRange)_localRangeForGlobalRange:(NSRange)range inParagraphContext:(_KKTextViewParagraphContext *)context {
+    if (!context) return NSMakeRange(NSNotFound, 0);
+    range = KKTextViewMakeSafeRange(range, _innerText.length);
+    NSUInteger paragraphStart = context.range.location;
+    NSUInteger paragraphEnd = NSMaxRange(context.range);
+    if (range.length == 0) {
+        if (range.location < paragraphStart || range.location > paragraphEnd) return NSMakeRange(NSNotFound, 0);
+        return NSMakeRange([self _localLocationForGlobalLocation:range.location inParagraphContext:context], 0);
+    }
+
+    NSUInteger start = MAX(range.location, paragraphStart);
+    NSUInteger end = MIN(NSMaxRange(range), paragraphEnd);
+    if (end <= start) return NSMakeRange(NSNotFound, 0);
+    return NSMakeRange(start - paragraphStart, end - start);
+}
+
+- (NSRange)_globalRangeForLocalRange:(NSRange)localRange inParagraphContext:(_KKTextViewParagraphContext *)context {
+    if (!context || localRange.location == NSNotFound) return NSMakeRange(NSNotFound, 0);
+    localRange = KKTextViewMakeSafeRange(localRange, context.text.length);
+    return NSMakeRange(context.range.location + localRange.location, localRange.length);
+}
+
+- (CGPoint)_localPointForDocumentPoint:(CGPoint)point inParagraphContext:(_KKTextViewParagraphContext *)context {
+    CGRect frame = context.contentView.frame;
+    return CGPointMake(point.x - frame.origin.x, point.y - frame.origin.y);
+}
+
+- (CGRect)_documentRectForLocalRect:(CGRect)rect inParagraphContext:(_KKTextViewParagraphContext *)context {
+    if (CGRectIsNull(rect)) return rect;
+    CGRect frame = context.contentView.frame;
+    rect.origin.x += frame.origin.x;
+    rect.origin.y += frame.origin.y;
+    return rect;
+}
+
+- (BOOL)_paragraphContext:(_KKTextViewParagraphContext *)context canUseLineAtIndex:(NSUInteger)lineIndex {
+    if (!context || lineIndex == NSNotFound || lineIndex >= context.layout.lines.count) return NO;
+    KKTextLine *line = context.layout.lines[lineIndex];
+    if (context.text.length == 0) return line.range.location == 0;
+    return line.range.location < context.text.length;
+}
+
+- (NSUInteger)_lineIndexForParagraphContext:(_KKTextViewParagraphContext *)context localLocation:(NSUInteger)localLocation {
+    if (!context.layout) return NSNotFound;
+    localLocation = MIN(localLocation, context.text.length);
+    KKTextPosition *position = [KKTextPosition positionWithOffset:localLocation];
+    NSUInteger lineIndex = [context.layout lineIndexForPosition:position];
+    if ([self _paragraphContext:context canUseLineAtIndex:lineIndex]) return lineIndex;
+    if (localLocation > 0) {
+        position = [KKTextPosition positionWithOffset:localLocation affinity:KKTextAffinityBackward];
+        lineIndex = [context.layout lineIndexForPosition:position];
+        if ([self _paragraphContext:context canUseLineAtIndex:lineIndex]) return lineIndex;
+    }
+    return NSNotFound;
+}
+
+- (NSUInteger)_lineIndexInParagraphContext:(_KKTextViewParagraphContext *)context fromLineIndex:(NSUInteger)lineIndex direction:(UITextLayoutDirection)direction {
+    if (!context.layout || lineIndex == NSNotFound) return NSNotFound;
+    NSInteger index = (NSInteger)lineIndex + (direction == UITextLayoutDirectionUp ? -1 : 1);
+    NSInteger count = (NSInteger)context.layout.lines.count;
+    while (0 <= index && index < count) {
+        if ([self _paragraphContext:context canUseLineAtIndex:(NSUInteger)index]) return (NSUInteger)index;
+        index += direction == UITextLayoutDirectionUp ? -1 : 1;
+    }
+    return NSNotFound;
+}
+
+- (NSUInteger)_edgeLineIndexForParagraphContext:(_KKTextViewParagraphContext *)context direction:(UITextLayoutDirection)direction {
+    if (!context.layout || context.layout.lines.count == 0) return NSNotFound;
+    NSInteger count = (NSInteger)context.layout.lines.count;
+    NSInteger index = direction == UITextLayoutDirectionUp ? count - 1 : 0;
+    while (0 <= index && index < count) {
+        if ([self _paragraphContext:context canUseLineAtIndex:(NSUInteger)index]) return (NSUInteger)index;
+        index += direction == UITextLayoutDirectionUp ? -1 : 1;
+    }
+    return NSNotFound;
+}
+
+- (NSUInteger)_textLocationInParagraphContext:(_KKTextViewParagraphContext *)context lineIndex:(NSUInteger)lineIndex targetX:(CGFloat)targetX {
+    if (![self _paragraphContext:context canUseLineAtIndex:lineIndex]) return NSNotFound;
+    KKTextLine *line = context.layout.lines[lineIndex];
+    CGFloat localX = targetX - context.contentView.frame.origin.x;
+    NSUInteger localLocation = [context.layout textPositionForPoint:CGPointMake(localX, line.position.y) lineIndex:lineIndex];
+    if (localLocation == NSNotFound) {
+        localX = MIN(MAX(localX, line.left), line.right);
+        localLocation = [context.layout textPositionForPoint:CGPointMake(localX, line.position.y) lineIndex:lineIndex];
+    }
+    if (localLocation == NSNotFound) return NSNotFound;
+    localLocation = MIN(localLocation, context.text.length);
+    return MIN(context.range.location + localLocation, _innerText.length);
+}
+
+- (NSUInteger)_caretAttributeIndexForText:(NSAttributedString *)text location:(NSUInteger)location {
+    if (text.length == 0) return NSNotFound;
+    location = MIN(location, text.length);
+    if (location == 0) return 0;
+    if (location < text.length && KKTextIsLinebreakChar([text.string characterAtIndex:location - 1])) {
+        return location;
+    }
+    return MIN(location - 1, text.length - 1);
+}
+
+- (void)_caretFontMetricsForFont:(id)font ascent:(CGFloat *)ascent descent:(CGFloat *)descent {
+    if (!font) font = _font;
+
+    CGFloat fontAscent = _font.ascender;
+    CGFloat fontDescent = -_font.descender;
+    if ([font isKindOfClass:UIFont.class]) {
+        UIFont *uiFont = font;
+        fontAscent = uiFont.ascender;
+        fontDescent = -uiFont.descender;
+    } else if (font && CFGetTypeID((__bridge CFTypeRef)font) == CTFontGetTypeID()) {
+        CTFontRef ctFont = (__bridge CTFontRef)font;
+        fontAscent = CTFontGetAscent(ctFont);
+        fontDescent = CTFontGetDescent(ctFont);
+    }
+    if (ascent) *ascent = ceil(MAX(fontAscent, 0));
+    if (descent) *descent = ceil(MAX(fontDescent, 0));
+}
+
+- (void)_caretFontMetricsForParagraphContext:(_KKTextViewParagraphContext *)context location:(NSUInteger)location ascent:(CGFloat *)ascent descent:(CGFloat *)descent {
+    id font = nil;
+    if (context.text.length > 0) {
+        NSUInteger localLocation = location <= context.range.location ? 0 : MIN(location - context.range.location, context.text.length);
+        NSUInteger index = [self _caretAttributeIndexForText:context.text location:localLocation];
+        if (index != NSNotFound) {
+            font = [context.text attribute:NSFontAttributeName atIndex:index effectiveRange:NULL];
+            if (!font) font = [context.text attribute:(id)kCTFontAttributeName atIndex:index effectiveRange:NULL];
+        }
+    }
+    if (!font) font = _typingAttributesHolder.kk_attributes[NSFontAttributeName];
+    if (!font) font = _typingAttributesHolder.kk_attributes[(id)kCTFontAttributeName];
+    [self _caretFontMetricsForFont:font ascent:ascent descent:descent];
+}
+
+- (CGRect)_caretRectByCenteringRect:(CGRect)rect withHeight:(CGFloat)height {
+    if (CGRectIsNull(rect) || height <= 0) return rect;
+    rect.origin.y = CGRectGetMidY(rect) - height * 0.5;
+    rect.size.height = height;
+    return rect;
+}
+
+- (CGRect)_localCaretRectForParagraphContext:(_KKTextViewParagraphContext *)context location:(NSUInteger)location {
+    if (!context.layout) return CGRectNull;
+    NSUInteger localLocation = location <= context.range.location ? 0 : MIN(location - context.range.location, context.text.length);
+    CGFloat caretAscent = 0;
+    CGFloat caretDescent = 0;
+    [self _caretFontMetricsForParagraphContext:context location:location ascent:&caretAscent descent:&caretDescent];
+    CGFloat caretHeight = caretAscent + caretDescent;
+    KKTextPosition *position = [KKTextPosition positionWithOffset:localLocation];
+    CGRect rect = [context.layout caretRectForPosition:position];
+    if (CGRectIsNull(rect)) {
+        rect = CGRectMake(_textContainerInset.left, 0, 0, caretHeight);
+    } else if (!_verticalForm && caretHeight > 0) {
+        rect = [self _caretRectByCenteringRect:rect withHeight:caretHeight];
+    }
+    if (_verticalForm) {
+        rect.size.height = MAX(rect.size.height, 2);
+    } else {
+        rect.size.width = MAX(rect.size.width, 2);
+    }
+    return rect;
+}
+
+- (CGFloat)_minimumParagraphHeightForContext:(_KKTextViewParagraphContext *)context {
+    CGFloat ascent = 0;
+    CGFloat descent = 0;
+    [self _caretFontMetricsForParagraphContext:context location:context.range.location ascent:&ascent descent:&descent];
+    return MAX(ceil(ascent + descent), 1);
+}
+
+- (CGFloat)_paragraphFirstVisibleLineTopForContext:(_KKTextViewParagraphContext *)context {
+    if (!context.layout) return 0;
+    for (NSUInteger idx = 0; idx < context.layout.lines.count; idx++) {
+        if (![self _paragraphContext:context canUseLineAtIndex:idx]) continue;
+        KKTextLine *line = context.layout.lines[idx];
+        return line.top;
+    }
+    return 0;
+}
+
+- (CGFloat)_paragraphVisibleTextHeightForContext:(_KKTextViewParagraphContext *)context {
+    CGFloat height = [self _minimumParagraphHeightForContext:context];
+    if (!context.layout) return height;
+    for (NSUInteger idx = 0; idx < context.layout.lines.count; idx++) {
+        if (![self _paragraphContext:context canUseLineAtIndex:idx]) continue;
+        KKTextLine *line = context.layout.lines[idx];
+        height = MAX(height, ceil(line.bottom));
+    }
+    return height;
+}
+
+- (CGSize)_paragraphDrawSizeForContext:(_KKTextViewParagraphContext *)context boundsSize:(CGSize)boundsSize {
+    if (_verticalForm || _exclusionPaths.count > 0) {
+        CGSize size = context.layout.textBoundingSize;
+        CGSize visibleSize = [self _getVisibleSize];
+        if (_verticalForm) {
+            size.height = visibleSize.height;
+            size.width = MAX(size.width, visibleSize.width);
+        } else {
+            size.width = visibleSize.width;
+            size.height = MAX(size.height, visibleSize.height);
+        }
+        return size;
+    }
+
+    CGSize size = boundsSize;
+    size.height = [self _paragraphVisibleTextHeightForContext:context];
+    CGRect startCaretRect = [self _localCaretRectForParagraphContext:context location:context.range.location];
+    if (!CGRectIsNull(startCaretRect)) {
+        size.height = MAX(size.height, ceil(CGRectGetMaxY(startCaretRect)));
+    }
+    return size;
+}
+
+- (NSUInteger)_paragraphAttributeIndexForContext:(_KKTextViewParagraphContext *)context preferEnd:(BOOL)preferEnd {
+    if (_innerText.length == 0) return NSNotFound;
+    if (context.range.length > 0) {
+        return preferEnd ? NSMaxRange(context.range) - 1 : context.range.location;
+    }
+    if (context.range.location < _innerText.length) return context.range.location;
+    return _innerText.length - 1;
+}
+
+- (CGFloat)_paragraphSpacingAfterContext:(_KKTextViewParagraphContext *)context nextContext:(_KKTextViewParagraphContext *)nextContext {
+    CGFloat spacing = 0;
+    NSUInteger endIndex = [self _paragraphAttributeIndexForContext:context preferEnd:YES];
+    if (endIndex != NSNotFound) {
+        spacing += MAX([_innerText kk_paragraphSpacingAtIndex:endIndex], 0);
+    }
+
+    NSUInteger nextStartIndex = [self _paragraphAttributeIndexForContext:nextContext preferEnd:NO];
+    if (nextStartIndex != NSNotFound) {
+        spacing += MAX([_innerText kk_paragraphSpacingBeforeAtIndex:nextStartIndex], 0);
+    }
+    return spacing;
+}
+
+- (CGFloat)_paragraphLineBreakAdvanceForContext:(_KKTextViewParagraphContext *)context {
+    if (context.lineBreakRange.length == 0 || !context.layout) return 0;
+    NSUInteger localLocation = context.text.length + MAX(context.lineBreakRange.length, 1);
+    KKTextPosition *position = [KKTextPosition positionWithOffset:localLocation affinity:KKTextAffinityBackward];
+    CGRect rect = [context.layout caretRectForPosition:position];
+    return CGRectIsNull(rect) ? 0 : ceil(CGRectGetMinY(rect));
+}
+
+- (CGFloat)_paragraphAdvanceToNextContext:(_KKTextViewParagraphContext *)context nextContext:(_KKTextViewParagraphContext *)nextContext {
+    if (!nextContext || !context.layout || context.lineBreakRange.length == 0) return 0;
+    NSUInteger probeLocation = context.text.length + context.lineBreakRange.length;
+    KKTextPosition *position = [KKTextPosition positionWithOffset:probeLocation];
+    CGRect rect = [context.layout caretRectForPosition:position];
+    if (CGRectIsNull(rect)) {
+        position = [KKTextPosition positionWithOffset:probeLocation affinity:KKTextAffinityBackward];
+        rect = [context.layout caretRectForPosition:position];
+    }
+    if (CGRectIsNull(rect)) return 0;
+    CGFloat nextTop = [self _paragraphFirstVisibleLineTopForContext:nextContext];
+    return MAX(ceil(CGRectGetMinY(rect) - nextTop), 0);
+}
+
+- (CGFloat)_paragraphHeightForContext:(_KKTextViewParagraphContext *)context nextContext:(_KKTextViewParagraphContext *)nextContext boundsSize:(CGSize)boundsSize {
+    CGFloat height = [self _paragraphDrawSizeForContext:context boundsSize:boundsSize].height;
+    if (nextContext) {
+        CGFloat advance = [self _paragraphAdvanceToNextContext:context nextContext:nextContext];
+        if (advance > 0) {
+            height = MAX(height, advance);
+        } else {
+            height = MAX(height, [self _paragraphLineBreakAdvanceForContext:context]);
+            height += [self _paragraphSpacingAfterContext:context nextContext:nextContext];
+        }
+    }
+    return MAX(height, [self _minimumParagraphHeightForContext:context]);
+}
+
+- (BOOL)_selectionRange:(NSRange)range containsEmptyParagraphContext:(_KKTextViewParagraphContext *)context {
+    if (!context || context.text.length > 0 || range.length == 0) return NO;
+    NSUInteger selectionStart = range.location;
+    NSUInteger selectionEnd = NSMaxRange(range);
+    if (context.lineBreakRange.length > 0) {
+        return NSIntersectionRange(range, context.lineBreakRange).length > 0;
+    }
+    if (context.range.location == 0 || selectionStart >= context.range.location || selectionEnd < context.range.location) {
+        return NO;
+    }
+    unichar previous = [_innerText.string characterAtIndex:context.range.location - 1];
+    return KKTextIsLinebreakChar(previous);
+}
+
+- (BOOL)_selectionRange:(NSRange)range containsLineBreakForParagraphContext:(_KKTextViewParagraphContext *)context {
+    if (!context || context.lineBreakRange.length == 0 || range.length == 0) return NO;
+    return NSIntersectionRange(range, context.lineBreakRange).length > 0;
+}
+
+- (CGRect)_paragraphTailSelectionLineBoundsForContext:(_KKTextViewParagraphContext *)context {
+    if (!context.layout) return CGRectNull;
+
+    NSUInteger lineIndex = [self _lineIndexForParagraphContext:context localLocation:context.text.length];
+    if (lineIndex == NSNotFound) {
+        lineIndex = [self _edgeLineIndexForParagraphContext:context direction:UITextLayoutDirectionDown];
+    }
+    if (lineIndex == NSNotFound) return CGRectNull;
+
+    KKTextLine *line = context.layout.lines[lineIndex];
+    return line.bounds;
+}
+
+- (NSArray<KKTextSelectionRect *> *)_selectionRectsForParagraphTailInContext:(_KKTextViewParagraphContext *)context {
+    if (!context.contentView) return @[];
+    CGRect caretRect = [self _localCaretRectForParagraphContext:context location:NSMaxRange(context.range)];
+    if (CGRectIsNull(caretRect)) {
+        caretRect = CGRectMake(_textContainerInset.left, 0, 0, [self _minimumParagraphHeightForContext:context]);
+    }
+    CGRect lineBounds = [self _paragraphTailSelectionLineBoundsForContext:context];
+    if (CGRectIsNull(lineBounds)) {
+        lineBounds = CGRectMake(_textContainerInset.left, 0, 0, [self _minimumParagraphHeightForContext:context]);
+    }
+
+    NSMutableArray<KKTextSelectionRect *> *rects = [NSMutableArray arrayWithCapacity:2];
+    CGFloat left = _textContainerInset.left;
+    CGFloat right = _textContainerInset.right;
+    CGFloat maxX = MAX(context.contentView.bounds.size.width - right, left);
+    CGFloat minY = MAX(CGRectGetMinY(lineBounds), 0);
+    CGFloat lineMaxY = MIN(CGRectGetMaxY(lineBounds), context.contentView.bounds.size.height);
+    if (lineMaxY <= minY) {
+        lineMaxY = MIN(minY + [self _minimumParagraphHeightForContext:context], context.contentView.bounds.size.height);
+    }
+    CGFloat caretX = MIN(MAX(CGRectGetMinX(caretRect), left), maxX);
+
+    if (maxX > caretX && lineMaxY > minY) {
+        KKTextSelectionRect *lineRect = [KKTextSelectionRect new];
+        lineRect.rect = [self _documentRectForLocalRect:CGRectMake(caretX, minY, maxX - caretX, lineMaxY - minY) inParagraphContext:context];
+        lineRect.isVertical = NO;
+        [rects addObject:lineRect];
+    }
+
+    if (context.contentView.bounds.size.height > lineMaxY && maxX > left) {
+        KKTextSelectionRect *tailRect = [KKTextSelectionRect new];
+        tailRect.rect = [self _documentRectForLocalRect:CGRectMake(left, lineMaxY, maxX - left, context.contentView.bounds.size.height - lineMaxY) inParagraphContext:context];
+        tailRect.isVertical = NO;
+        [rects addObject:tailRect];
+    }
+    return rects;
+}
+
+- (NSArray<KKTextSelectionRect *> *)_selectionRectsForRange:(NSRange)range mode:(_KKTextViewSelectionRectMode)mode {
+    range = KKTextViewMakeSafeRange(range, _innerText.length);
+    if (range.length == 0) return @[];
+
+    NSMutableArray<KKTextSelectionRect *> *rects = [NSMutableArray array];
+    for (_KKTextViewParagraphContext *context in _paragraphContexts) {
+        NSRange localRange = [self _localRangeForGlobalRange:range inParagraphContext:context];
+        BOOL containsLineBreak = [self _selectionRange:range containsLineBreakForParagraphContext:context];
+        if (localRange.location == NSNotFound || localRange.length == 0) {
+            if (mode != _KKTextViewSelectionRectModeOnlyStartAndEnd) {
+                if ([self _selectionRange:range containsEmptyParagraphContext:context] || containsLineBreak) {
+                    [rects addObjectsFromArray:[self _selectionRectsForParagraphTailInContext:context]];
+                }
+            }
+            continue;
+        }
+
+        KKTextRange *textRange = [KKTextRange rangeWithRange:localRange];
+        NSArray<KKTextSelectionRect *> *localRects = nil;
+        if (mode == _KKTextViewSelectionRectModeWithoutStartAndEnd) {
+            localRects = [context.layout selectionRectsWithoutStartAndEndForRange:textRange];
+        } else if (mode == _KKTextViewSelectionRectModeOnlyStartAndEnd) {
+            localRects = [context.layout selectionRectsWithOnlyStartAndEndForRange:textRange];
+        } else {
+            localRects = [context.layout selectionRectsForRange:textRange];
+        }
+        for (KKTextSelectionRect *localRect in localRects) {
+            KKTextSelectionRect *rect = localRect.copy;
+            rect.rect = [self _documentRectForLocalRect:rect.rect inParagraphContext:context];
+            [rects addObject:rect];
+        }
+        if (mode != _KKTextViewSelectionRectModeOnlyStartAndEnd && containsLineBreak) {
+            [rects addObjectsFromArray:[self _selectionRectsForParagraphTailInContext:context]];
+        }
+    }
+    return rects;
+}
+
+- (NSArray<KKTextSelectionRect *> *)_selectionRectsForTextRange:(KKTextRange *)range {
+    return [self _selectionRectsForRange:range.asRange mode:_KKTextViewSelectionRectModeAll];
+}
+
+- (NSArray<KKTextSelectionRect *> *)_selectionRectsWithoutStartAndEndForTextRange:(KKTextRange *)range {
+    return [self _selectionRectsForRange:range.asRange mode:_KKTextViewSelectionRectModeWithoutStartAndEnd];
+}
+
+- (NSArray<KKTextSelectionRect *> *)_selectionRectsWithOnlyStartAndEndForTextRange:(KKTextRange *)range {
+    return [self _selectionRectsForRange:range.asRange mode:_KKTextViewSelectionRectModeOnlyStartAndEnd];
+}
+
+- (CGRect)_rectForTextRange:(KKTextRange *)range {
+    if (!range) return CGRectNull;
+    if (range.asRange.length == 0) return [self _caretRectForTextPosition:range.end];
+    CGRect rect = CGRectNull;
+    for (KKTextSelectionRect *selectionRect in [self _selectionRectsForTextRange:range]) {
+        if (CGRectIsEmpty(selectionRect.rect) || CGRectIsNull(selectionRect.rect)) continue;
+        rect = CGRectIsNull(rect) ? selectionRect.rect : CGRectUnion(rect, selectionRect.rect);
+    }
+    return rect;
+}
+
+- (CGRect)_firstRectForTextRange:(KKTextRange *)range {
+    if (!range) return CGRectNull;
+    _KKTextViewParagraphContext *context = [self _paragraphContextForLocation:range.start.offset];
+    NSRange localRange = [self _localRangeForGlobalRange:range.asRange inParagraphContext:context];
+    if (!context.layout || localRange.location == NSNotFound) return CGRectNull;
+    CGRect rect = [context.layout firstRectForRange:[KKTextRange rangeWithRange:localRange]];
+    return [self _documentRectForLocalRect:rect inParagraphContext:context];
+}
+
+- (CGRect)_caretRectForTextPosition:(KKTextPosition *)position {
+    position = [self _correctedTextPosition:position];
+    if (!position) return CGRectNull;
+    _KKTextViewParagraphContext *context = [self _paragraphContextForLocation:position.offset];
+    CGRect rect = [self _localCaretRectForParagraphContext:context location:position.offset];
+    return [self _documentRectForLocalRect:rect inParagraphContext:context];
+}
+
+- (KKTextPosition *)_closestPositionForDocumentPoint:(CGPoint)point {
+    _KKTextViewParagraphContext *context = [self _paragraphContextForDocumentPoint:point];
+    if (!context.layout) return nil;
+    CGPoint localPoint = [self _localPointForDocumentPoint:point inParagraphContext:context];
+    KKTextPosition *position = [context.layout closestPositionToPoint:localPoint];
+    if (!position) return nil;
+    position = [KKTextPosition positionWithOffset:context.range.location + MIN(position.offset, context.text.length) affinity:position.affinity];
+    return [self _correctedTextPosition:position];
+}
+
+- (KKTextPosition *)_positionForDocumentPoint:(CGPoint)point oldPosition:(KKTextPosition *)oldPosition otherPosition:(KKTextPosition *)otherPosition {
+    _KKTextViewParagraphContext *context = [self _paragraphContextForDocumentPoint:point];
+    if (!context.layout) return nil;
+    CGPoint localPoint = [self _localPointForDocumentPoint:point inParagraphContext:context];
+    KKTextPosition *localOld = oldPosition ? [KKTextPosition positionWithOffset:[self _localLocationForGlobalLocation:oldPosition.offset inParagraphContext:context] affinity:oldPosition.affinity] : nil;
+    KKTextPosition *localOther = otherPosition ? [KKTextPosition positionWithOffset:[self _localLocationForGlobalLocation:otherPosition.offset inParagraphContext:context] affinity:otherPosition.affinity] : nil;
+    KKTextPosition *position = [context.layout positionForPoint:localPoint oldPosition:localOld otherPosition:localOther];
+    if (!position) return nil;
+    position = [KKTextPosition positionWithOffset:context.range.location + MIN(position.offset, context.text.length) affinity:position.affinity];
+    return [self _correctedTextPosition:position];
+}
+
+- (KKTextRange *)_textRangeAtDocumentPoint:(CGPoint)point closest:(BOOL)closest {
+    _KKTextViewParagraphContext *context = [self _paragraphContextForDocumentPoint:point];
+    if (!context.layout) return nil;
+    CGPoint localPoint = [self _localPointForDocumentPoint:point inParagraphContext:context];
+    KKTextRange *range = closest ? [context.layout closestTextRangeAtPoint:localPoint] : [context.layout textRangeAtPoint:localPoint];
+    if (!range) return nil;
+    NSRange globalRange = [self _globalRangeForLocalRange:range.asRange inParagraphContext:context];
+    return [self _correctedTextRange:[KKTextRange rangeWithRange:globalRange affinity:range.end.affinity]];
+}
+
+- (KKTextRange *)_textRangeByExtendingTextPosition:(KKTextPosition *)position {
+    position = [self _correctedTextPosition:position];
+    if (!position) return nil;
+    _KKTextViewParagraphContext *context = [self _paragraphContextForLocation:position.offset];
+    if (!context.layout) return nil;
+    KKTextPosition *localPosition = [KKTextPosition positionWithOffset:[self _localLocationForGlobalLocation:position.offset inParagraphContext:context] affinity:position.affinity];
+    KKTextRange *range = [context.layout textRangeByExtendingPosition:localPosition];
+    NSRange globalRange = [self _globalRangeForLocalRange:range.asRange inParagraphContext:context];
+    return [self _correctedTextRange:[KKTextRange rangeWithRange:globalRange affinity:range.end.affinity]];
+}
+
+- (KKTextRange *)_textRangeByExtendingTextPosition:(KKTextPosition *)position inDirection:(UITextLayoutDirection)direction offset:(NSInteger)offset {
+    position = [self _correctedTextPosition:position];
+    if (!position) return nil;
+    if (offset == 0) return [self _textRangeByExtendingTextPosition:position];
+
+    BOOL verticalMove = _verticalForm ? (direction == UITextLayoutDirectionLeft || direction == UITextLayoutDirectionRight) : (direction == UITextLayoutDirectionUp || direction == UITextLayoutDirectionDown);
+    if (!verticalMove) {
+        NSInteger newLocation = (NSInteger)position.offset;
+        BOOL forward = _verticalForm ? (direction == UITextLayoutDirectionLeft || direction == UITextLayoutDirectionDown) : (direction == UITextLayoutDirectionDown || direction == UITextLayoutDirectionRight);
+        newLocation += forward ? offset : -offset;
+        newLocation = MAX(0, MIN((NSInteger)_innerText.length, newLocation));
+        return [self _textRangeByExtendingTextPosition:[KKTextPosition positionWithOffset:(NSUInteger)newLocation]];
+    }
+
+    _KKTextViewParagraphContext *context = [self _paragraphContextForLocation:position.offset];
+    NSUInteger localLocation = [self _localLocationForGlobalLocation:position.offset inParagraphContext:context];
+    NSUInteger lineIndex = [self _lineIndexForParagraphContext:context localLocation:localLocation];
+    if (lineIndex != NSNotFound) {
+        NSUInteger targetLineIndex = [self _lineIndexInParagraphContext:context fromLineIndex:lineIndex direction:direction];
+        if (targetLineIndex != NSNotFound) {
+            CGFloat targetX = CGRectGetMidX([self _caretRectForTextPosition:position]);
+            NSUInteger location = [self _textLocationInParagraphContext:context lineIndex:targetLineIndex targetX:targetX];
+            if (location != NSNotFound) {
+                return [self _textRangeByExtendingTextPosition:[KKTextPosition positionWithOffset:location]];
+            }
+        }
+    }
+
+    NSUInteger contextIndex = [_paragraphContexts indexOfObjectIdenticalTo:context];
+    if (contextIndex == NSNotFound) return nil;
+    if (direction == UITextLayoutDirectionUp) {
+        if (contextIndex == 0) return [KKTextRange rangeWithRange:NSMakeRange(0, 0)];
+        context = _paragraphContexts[contextIndex - 1];
+        lineIndex = [self _edgeLineIndexForParagraphContext:context direction:UITextLayoutDirectionUp];
+    } else {
+        if (contextIndex + 1 >= _paragraphContexts.count) return [KKTextRange rangeWithRange:NSMakeRange(_innerText.length, 0)];
+        context = _paragraphContexts[contextIndex + 1];
+        lineIndex = [self _edgeLineIndexForParagraphContext:context direction:UITextLayoutDirectionDown];
+    }
+    CGFloat targetX = CGRectGetMidX([self _caretRectForTextPosition:position]);
+    NSUInteger location = [self _textLocationInParagraphContext:context lineIndex:lineIndex targetX:targetX];
+    if (location == NSNotFound) return nil;
+    return [self _textRangeByExtendingTextPosition:[KKTextPosition positionWithOffset:location]];
+}
+
+- (void)_updateParagraphContainerViewsReusingLayouts:(BOOL)reuseLayouts fadeDuration:(NSTimeInterval)fadeDuration {
+    NSArray<_KKTextViewParagraphContext *> *oldContexts = _paragraphContexts.copy;
+    NSAttributedString *displayText = [self _paragraphDisplayText];
+    NSArray<NSValue *> *ranges = [self _paragraphContentRanges];
+    NSMutableArray<_KKTextViewParagraphContext *> *contexts = [NSMutableArray arrayWithCapacity:ranges.count];
+    NSMutableSet<KKTextContainerView *> *activeViews = [NSMutableSet set];
+    NSMutableSet<_KKTextViewParagraphContext *> *reusedOldContexts = [NSMutableSet set];
+    CGSize containerSize = [self _paragraphLayoutContainerSize];
+    CGSize visibleSize = [self _getVisibleSize];
+    CGFloat width = visibleSize.width;
+    CGFloat fallbackY = _textContainerInset.top;
+
+    for (NSUInteger idx = 0; idx < ranges.count; idx++) {
+        _KKTextViewParagraphContext *context = [self _paragraphContextWithRange:ranges[idx].rangeValue displayText:displayText];
+        context.layoutContainerSize = containerSize;
+        [contexts addObject:context];
+    }
+
+    for (NSUInteger idx = 0; idx < contexts.count; idx++) {
+        _KKTextViewParagraphContext *context = contexts[idx];
+        _KKTextViewParagraphContext *nextContext = idx + 1 < contexts.count ? contexts[idx + 1] : nil;
+        context.layoutTailText = [self _paragraphLayoutTailTextForContext:context nextContext:nextContext displayText:displayText];
+        _KKTextViewParagraphContext *oldContext = [self _oldParagraphContextForCurrentContext:context oldContexts:oldContexts index:idx];
+        if (oldContext && [reusedOldContexts containsObject:oldContext]) oldContext = nil;
+        if (reuseLayouts &&
+            [self _paragraphContext:context canReuseLayoutFromContext:oldContext containerSize:containerSize]) {
+            context.layout = oldContext.layout;
+            context.contentView = oldContext.contentView;
+            [reusedOldContexts addObject:oldContext];
+        } else {
+            context.layout = [self _layoutForParagraphContext:context containerSize:containerSize];
+        }
+
+        if (!context.contentView) {
+            context.contentView = [KKTextContainerView new];
+            context.contentView.hostView = self;
+            context.contentView.debugOption = _containerView.debugOption;
+            [_containerView addSubview:context.contentView];
+        }
+        context.contentView.textVerticalAlignment = KKTextVerticalAlignmentTop;
+        [context.contentView setLayout:context.layout withFadeDuration:fadeDuration];
+        [activeViews addObject:context.contentView];
+    }
+
+    CGSize contentSize = visibleSize;
+    if (_verticalForm || _exclusionPaths.count > 0) {
+        _KKTextViewParagraphContext *context = contexts.firstObject;
+        CGSize drawSize = [self _paragraphDrawSizeForContext:context boundsSize:visibleSize];
+        context.contentView.frame = (CGRect){CGPointZero, drawSize};
+        contentSize = drawSize;
+    } else {
+        for (NSUInteger idx = 0; idx < contexts.count; idx++) {
+            _KKTextViewParagraphContext *context = contexts[idx];
+            _KKTextViewParagraphContext *nextContext = idx + 1 < contexts.count ? contexts[idx + 1] : nil;
+            CGFloat height = [self _paragraphHeightForContext:context nextContext:nextContext boundsSize:CGSizeMake(width, 0)];
+            context.contentView.frame = (CGRect){CGPointMake(0, fallbackY), CGSizeMake(width, height)};
+            fallbackY += height;
+        }
+        contentSize = CGSizeMake(width, MAX(fallbackY + _textContainerInset.bottom, visibleSize.height));
+    }
+
+    for (_KKTextViewParagraphContext *oldContext in oldContexts) {
+        if (oldContext.contentView && ![activeViews containsObject:oldContext.contentView]) {
+            [oldContext.contentView removeFromSuperview];
+        }
+    }
+
+    _paragraphContexts = contexts;
+    _containerView.frame = (CGRect){.size = contentSize};
+    _selectionView.frame = _containerView.frame;
+    self.contentSize = contentSize;
+    [self _clearParagraphEditRecord];
+}
+
+- (void)_updateParagraphContainerViewsReusingLayouts:(BOOL)reuseLayouts {
+    [self _updateParagraphContainerViewsReusingLayouts:reuseLayouts fadeDuration:0];
 }
 
 /// Update placeholder before runloop sleep/end.
@@ -412,8 +1266,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
 - (void)_updateTextRangeByTrackingCaret {
     if (!_state.trackingTouch) return;
     
-    CGPoint trackingPoint = [self _convertPointToLayout:_trackingPoint];
-    KKTextPosition *newPos = [_innerLayout closestPositionToPoint:trackingPoint];
+    KKTextPosition *newPos = [self _closestPositionForDocumentPoint:_trackingPoint];
     if (newPos) {
         newPos = [self _correctedTextPosition:newPos];
         if (_markedTextRange) {
@@ -435,10 +1288,9 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     BOOL isStart = _state.trackingGrabber == kStart;
     CGPoint magPoint = _trackingPoint;
     magPoint.y += kMagnifierRangedTrackFix;
-    magPoint = [self _convertPointToLayout:magPoint];
-    KKTextPosition *position = [_innerLayout positionForPoint:magPoint
-                                                  oldPosition:(isStart ? _selectedTextRange.start : _selectedTextRange.end)
-                                                otherPosition:(isStart ? _selectedTextRange.end : _selectedTextRange.start)];
+    KKTextPosition *position = [self _positionForDocumentPoint:magPoint
+                                                   oldPosition:(isStart ? _selectedTextRange.start : _selectedTextRange.end)
+                                                 otherPosition:(isStart ? _selectedTextRange.end : _selectedTextRange.start)];
     if (position) {
         position = [self _correctedTextPosition:position];
         if ((NSUInteger)position.offset > _innerText.length) {
@@ -506,22 +1358,25 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     if (_markedTextRange) {
         position = selectedRange.end;
     } else {
-        position = [_innerLayout positionForPoint:[self _convertPointToLayout:magPoint]
-                                      oldPosition:(_state.trackingGrabber == kStart ? selectedRange.start : selectedRange.end)
-                                    otherPosition:(_state.trackingGrabber == kStart ? selectedRange.end : selectedRange.start)];
+        position = [self _positionForDocumentPoint:magPoint
+                                       oldPosition:(_state.trackingGrabber == kStart ? selectedRange.start : selectedRange.end)
+                                     otherPosition:(_state.trackingGrabber == kStart ? selectedRange.end : selectedRange.start)];
     }
-    
-    NSUInteger lineIndex = [_innerLayout lineIndexForPosition:position];
-    if (lineIndex < _innerLayout.lines.count) {
-        KKTextLine *line = _innerLayout.lines[lineIndex];
-        CGRect lineRect = [self _convertRectFromLayout:line.bounds];
+    if (!position) return;
+
+    _KKTextViewParagraphContext *paragraphContext = [self _paragraphContextForLocation:position.offset];
+    KKTextPosition *localPosition = [KKTextPosition positionWithOffset:[self _localLocationForGlobalLocation:position.offset inParagraphContext:paragraphContext] affinity:position.affinity];
+    NSUInteger lineIndex = [paragraphContext.layout lineIndexForPosition:localPosition];
+    if ([self _paragraphContext:paragraphContext canUseLineAtIndex:lineIndex]) {
+        KKTextLine *line = paragraphContext.layout.lines[lineIndex];
+        CGRect lineRect = [self _documentRectForLocalRect:line.bounds inParagraphContext:paragraphContext];
         if (_verticalForm) {
             magPoint.x = KKTEXT_CLAMP(magPoint.x, CGRectGetMinX(lineRect), CGRectGetMaxX(lineRect));
         } else {
             magPoint.y = KKTEXT_CLAMP(magPoint.y, CGRectGetMinY(lineRect), CGRectGetMaxY(lineRect));
         }
-        CGPoint linePoint = [_innerLayout linePositionForPosition:position];
-        linePoint = [self _convertPointFromLayout:linePoint];
+        CGPoint linePoint = [paragraphContext.layout linePositionForPosition:localPosition];
+        linePoint = [self _documentRectForLocalRect:(CGRect){linePoint, CGSizeZero} inParagraphContext:paragraphContext].origin;
         
         CGPoint popoverPoint = linePoint;
         if (_verticalForm) {
@@ -663,42 +1518,29 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     }
 }
 
-/// Show highlight layout based on `_highlight` and `_highlightRange`
-/// If the `_highlightLayout` is nil, try to create.
+/// Show highlight layout based on `_highlight` and `_highlightRange`.
 - (void)_showHighlightAnimated:(BOOL)animated {
     NSTimeInterval fadeDuration = animated ? kHighlightFadeDuration : 0;
     if (!_highlight) return;
-    if (!_highlightLayout) {
-        NSMutableAttributedString *hiText = (_delectedText ? _delectedText : _innerText).mutableCopy;
-        NSDictionary *newAttrs = _highlight.attributes;
-        [newAttrs enumerateKeysAndObjectsUsingBlock:^(NSString *key, id value, BOOL *stop) {
-            [hiText kk_setAttribute:key value:value range:_highlightRange];
-        }];
-        _highlightLayout = [KKTextLayout layoutWithContainer:_innerContainer text:hiText];
-        if (!_highlightLayout) _highlight = nil;
-    }
-    
-    if (_highlightLayout && !_state.showingHighlight) {
+    if (!_state.showingHighlight) {
         _state.showingHighlight = YES;
-        [_containerView setLayout:_highlightLayout withFadeDuration:fadeDuration];
+        [self _updateParagraphContainerViewsReusingLayouts:NO fadeDuration:fadeDuration];
     }
 }
 
-/// Show `_innerLayout` instead of `_highlightLayout`.
-/// It does not destory the `_highlightLayout`.
+/// Restore paragraph layouts instead of highlight layouts.
 - (void)_hideHighlightAnimated:(BOOL)animated {
     NSTimeInterval fadeDuration = animated ? kHighlightFadeDuration : 0;
     if (_state.showingHighlight) {
         _state.showingHighlight = NO;
-        [_containerView setLayout:_innerLayout withFadeDuration:fadeDuration];
+        [self _updateParagraphContainerViewsReusingLayouts:NO fadeDuration:fadeDuration];
     }
 }
 
-/// Show `_innerLayout` and destory the `_highlight` and `_highlightLayout`.
+/// Restore paragraph layouts and destroy the highlight state.
 - (void)_removeHighlightAnimated:(BOOL)animated {
     [self _hideHighlightAnimated:animated];
     _highlight = nil;
-    _highlightLayout = nil;
 }
 
 /// Scroll current selected range to visible.
@@ -709,9 +1551,8 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
 /// Scroll range to visible, take account into keyboard and insets.
 - (void)_scrollRangeToVisible:(KKTextRange *)range {
     if (!range) return;
-    CGRect rect = [_innerLayout rectForRange:range];
+    CGRect rect = [self _rectForTextRange:range];
     if (CGRectIsNull(rect)) return;
-    rect = [self _convertRectFromLayout:rect];
     rect = [_containerView convertRect:rect toView:self];
     
     if (rect.size.width < 1) rect.size.width = 1;
@@ -834,8 +1675,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
         
         if (_highlight.longPressAction) {
             dealLongPressAction = YES;
-            CGRect rect = [_innerLayout rectForRange:[KKTextRange rangeWithRange:_highlightRange]];
-            rect = [self _convertRectFromLayout:rect];
+            CGRect rect = [self _rectForTextRange:[KKTextRange rangeWithRange:_highlightRange]];
             _highlight.longPressAction(self, _innerText, _highlightRange, rect);
             [self _endTouchTracking];
         } else {
@@ -845,8 +1685,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
             }
             if (shouldHighlight && [self.delegate respondsToSelector:@selector(textView:didLongPressHighlight:inRange:rect:)]) {
                 dealLongPressAction = YES;
-                CGRect rect = [_innerLayout rectForRange:[KKTextRange rangeWithRange:_highlightRange]];
-                rect = [self _convertRectFromLayout:rect];
+                CGRect rect = [self _rectForTextRange:[KKTextRange rangeWithRange:_highlightRange]];
                 [self.delegate textView:self didLongPressHighlight:_highlight inRange:_highlightRange rect:rect];
                 [self _endTouchTracking];
             }
@@ -864,8 +1703,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
                 self.panGestureRecognizer.enabled = NO;
                 _selectionView.caretBlinks = NO;
                 _state.trackingCaret = YES;
-                CGPoint trackingPoint = [self _convertPointToLayout:_trackingPoint];
-                KKTextPosition *newPos = [_innerLayout closestPositionToPoint:trackingPoint];
+                KKTextPosition *newPos = [self _closestPositionForDocumentPoint:_trackingPoint];
                 newPos = [self _correctedTextPosition:newPos];
                 if (newPos) {
                     if (_markedTextRange) {
@@ -1076,15 +1914,15 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     }
     
     if (!range || range.asRange.length == 0) {
-        range = [_innerLayout textRangeByExtendingPosition:position inDirection:UITextLayoutDirectionRight offset:1];
+        range = [self _textRangeByExtendingTextPosition:position inDirection:UITextLayoutDirectionRight offset:1];
         range = [self _correctedTextRange:range];
         if (range.asRange.length == 0) {
-            range = [_innerLayout textRangeByExtendingPosition:position inDirection:UITextLayoutDirectionLeft offset:1];
+            range = [self _textRangeByExtendingTextPosition:position inDirection:UITextLayoutDirectionLeft offset:1];
             range = [self _correctedTextRange:range];
         }
     } else {
-        KKTextRange *extStart = [_innerLayout textRangeByExtendingPosition:range.start];
-        KKTextRange *extEnd = [_innerLayout textRangeByExtendingPosition:range.end];
+        KKTextRange *extStart = [self _textRangeByExtendingTextPosition:range.start];
+        KKTextRange *extEnd = [self _textRangeByExtendingTextPosition:range.end];
         if (extStart && extEnd) {
             NSArray *arr = [@[extStart.start, extStart.end, extEnd.start, extEnd.end] sortedArrayUsingSelector:@selector(compare:)];
             range = [KKTextRange rangeWithStart:arr.firstObject end:arr.lastObject];
@@ -1101,8 +1939,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
 
 /// Try to get the character range/position with word granularity from the tokenizer.
 - (KKTextRange *)_getClosestTokenRangeAtPoint:(CGPoint)point {
-    point = [self _convertPointToLayout:point];
-    KKTextRange *touchRange = [_innerLayout closestTextRangeAtPoint:point];
+    KKTextRange *touchRange = [self _textRangeAtDocumentPoint:point closest:YES];
     touchRange = [self _correctedTextRange:touchRange];
     
     if (_tokenizer && touchRange) {
@@ -1115,8 +1952,8 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     }
     
     if (touchRange) {
-        KKTextRange *extStart = [_innerLayout textRangeByExtendingPosition:touchRange.start];
-        KKTextRange *extEnd = [_innerLayout textRangeByExtendingPosition:touchRange.end];
+        KKTextRange *extStart = [self _textRangeByExtendingTextPosition:touchRange.start];
+        KKTextRange *extEnd = [self _textRangeByExtendingTextPosition:touchRange.end];
         if (extStart && extEnd) {
             NSArray *arr = [@[extStart.start, extStart.end, extEnd.start, extEnd.end] sortedArrayUsingSelector:@selector(compare:)];
             touchRange = [KKTextRange rangeWithStart:arr.firstObject end:arr.lastObject];
@@ -1135,9 +1972,8 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
 /// Try to get the highlight property. If exist, the range will be returnd by the range pointer.
 /// If the delegate ignore the highlight, returns nil.
 - (KKTextHighlight *)_getHighlightAtPoint:(CGPoint)point range:(NSRangePointer)range {
-    if (!_highlightable || !_innerLayout.containsHighlight) return nil;
-    point = [self _convertPointToLayout:point];
-    KKTextRange *textRange = [_innerLayout textRangeAtPoint:point];
+    if (!_highlightable) return nil;
+    KKTextRange *textRange = [self _textRangeAtDocumentPoint:point closest:NO];
     textRange = [self _correctedTextRange:textRange];
     if (!textRange) return nil;
     NSUInteger startIndex = textRange.start.offset;
@@ -1171,22 +2007,25 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
 /// Return the ranged magnifier popover offset from the baseline, base on `_trackingPoint`.
 - (CGFloat)_getMagnifierRangedOffset {
     CGPoint magPoint = _trackingPoint;
-    magPoint = [self _convertPointToLayout:magPoint];
     if (_verticalForm) {
         magPoint.x += kMagnifierRangedTrackFix;
     } else {
         magPoint.y += kMagnifierRangedTrackFix;
     }
-    KKTextPosition *position = [_innerLayout closestPositionToPoint:magPoint];
-    NSUInteger lineIndex = [_innerLayout lineIndexForPosition:position];
-    if (lineIndex < _innerLayout.lines.count) {
-        KKTextLine *line = _innerLayout.lines[lineIndex];
+    KKTextPosition *position = [self _closestPositionForDocumentPoint:magPoint];
+    _KKTextViewParagraphContext *paragraphContext = [self _paragraphContextForLocation:position.offset];
+    KKTextPosition *localPosition = [KKTextPosition positionWithOffset:[self _localLocationForGlobalLocation:position.offset inParagraphContext:paragraphContext] affinity:position.affinity];
+    NSUInteger lineIndex = [paragraphContext.layout lineIndexForPosition:localPosition];
+    if ([self _paragraphContext:paragraphContext canUseLineAtIndex:lineIndex]) {
+        KKTextLine *line = paragraphContext.layout.lines[lineIndex];
+        CGRect lineBounds = [self _documentRectForLocalRect:line.bounds inParagraphContext:paragraphContext];
+        CGPoint linePosition = [self _documentRectForLocalRect:(CGRect){line.position, CGSizeZero} inParagraphContext:paragraphContext].origin;
         if (_verticalForm) {
-            magPoint.x = KKTEXT_CLAMP(magPoint.x, line.left, line.right);
-            return magPoint.x - line.position.x + kMagnifierRangedPopoverOffset;
+            magPoint.x = KKTEXT_CLAMP(magPoint.x, CGRectGetMinX(lineBounds), CGRectGetMaxX(lineBounds));
+            return magPoint.x - linePosition.x + kMagnifierRangedPopoverOffset;
         } else {
-            magPoint.y = KKTEXT_CLAMP(magPoint.y, line.top, line.bottom);
-            return magPoint.y - line.position.y + kMagnifierRangedPopoverOffset;
+            magPoint.y = KKTEXT_CLAMP(magPoint.y, CGRectGetMinY(lineBounds), CGRectGetMaxY(lineBounds));
+            return magPoint.y - linePosition.y + kMagnifierRangedPopoverOffset;
         }
     } else {
         return 0;
@@ -1354,72 +2193,6 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     return [KKTextRange rangeWithStart:start end:end];
 }
 
-/// Convert the point from this view to text layout.
-- (CGPoint)_convertPointToLayout:(CGPoint)point {
-    CGSize boundingSize = _innerLayout.textBoundingSize;
-    if (_innerLayout.container.isVerticalForm) {
-        CGFloat w = _innerLayout.textBoundingSize.width;
-        if (w < self.bounds.size.width) w = self.bounds.size.width;
-        point.x += _innerLayout.container.size.width - w;
-        if (boundingSize.width < self.bounds.size.width) {
-            if (_textVerticalAlignment == KKTextVerticalAlignmentCenter) {
-                point.x += (self.bounds.size.width - boundingSize.width) * 0.5;
-            } else if (_textVerticalAlignment == KKTextVerticalAlignmentBottom) {
-                point.x += (self.bounds.size.width - boundingSize.width);
-            }
-        }
-        return point;
-    } else {
-        if (boundingSize.height < self.bounds.size.height) {
-            if (_textVerticalAlignment == KKTextVerticalAlignmentCenter) {
-                point.y -= (self.bounds.size.height - boundingSize.height) * 0.5;
-            } else if (_textVerticalAlignment == KKTextVerticalAlignmentBottom) {
-                point.y -= (self.bounds.size.height - boundingSize.height);
-            }
-        }
-        return point;
-    }
-}
-
-/// Convert the point from text layout to this view.
-- (CGPoint)_convertPointFromLayout:(CGPoint)point {
-    CGSize boundingSize = _innerLayout.textBoundingSize;
-    if (_innerLayout.container.isVerticalForm) {
-        CGFloat w = _innerLayout.textBoundingSize.width;
-        if (w < self.bounds.size.width) w = self.bounds.size.width;
-        point.x -= _innerLayout.container.size.width - w;
-        if (boundingSize.width < self.bounds.size.width) {
-            if (_textVerticalAlignment == KKTextVerticalAlignmentCenter) {
-                point.x -= (self.bounds.size.width - boundingSize.width) * 0.5;
-            } else if (_textVerticalAlignment == KKTextVerticalAlignmentBottom) {
-                point.x -= (self.bounds.size.width - boundingSize.width);
-            }
-        }
-        return point;
-    } else {
-        if (boundingSize.height < self.bounds.size.height) {
-            if (_textVerticalAlignment == KKTextVerticalAlignmentCenter) {
-                point.y += (self.bounds.size.height - boundingSize.height) * 0.5;
-            } else if (_textVerticalAlignment == KKTextVerticalAlignmentBottom) {
-                point.y += (self.bounds.size.height - boundingSize.height);
-            }
-        }
-        return point;
-    }
-}
-
-/// Convert the rect from this view to text layout.
-- (CGRect)_convertRectToLayout:(CGRect)rect {
-    rect.origin = [self _convertPointToLayout:rect.origin];
-    return rect;
-}
-
-/// Convert the rect from text layout to this view.
-- (CGRect)_convertRectFromLayout:(CGRect)rect {
-    rect.origin = [self _convertPointFromLayout:rect.origin];
-    return rect;
-}
-
 /// Replace the range with the text, and change the `_selectTextRange`.
 /// The caller should make sure the `range` and `text` are valid before call this method.
 - (void)_replaceRange:(KKTextRange *)range withText:(NSString *)text notifyToDelegate:(BOOL)notify{
@@ -1470,6 +2243,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     }
     if (notify) [_inputDelegate textWillChange:self];
     NSRange newRange = NSMakeRange(range.asRange.location, text.length);
+    [self _recordParagraphEditRange:range.asRange replacementLength:text.length];
     [_innerText replaceCharactersInRange:range.asRange withString:text];
     [_innerText kk_removeDiscontinuousAttributesInRange:newRange];
     if (notify) [_inputDelegate textDidChange:self];
@@ -1976,6 +2750,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     _textAlignment = NSTextAlignmentNatural;
     
     _innerText = [NSMutableAttributedString new];
+    _paragraphContexts = [NSMutableArray new];
     _innerContainer = [KKTextContainer new];
     _innerContainer.insets = kDefaultInset;
     _textContainerInset = kDefaultInset;
@@ -2335,6 +3110,9 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
 
 - (void)setDebugOption:(KKTextDebugOption *)debugOption {
     _containerView.debugOption = debugOption;
+    for (_KKTextViewParagraphContext *context in _paragraphContexts) {
+        context.contentView.debugOption = debugOption;
+    }
 }
 
 - (KKTextDebugOption *)debugOption {
@@ -2343,7 +3121,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
 
 - (KKTextLayout *)textLayout {
     [self _updateIfNeeded];
-    return _innerLayout;
+    return nil;
 }
 
 - (void)setPlaceholderText:(NSString *)placeholderText {
@@ -2522,7 +3300,6 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     
     if (!self.isFirstResponder && !_state.selectedWithoutEdit && self.highlightable) {
         _highlight = [self _getHighlightAtPoint:point range:&_highlightRange];
-        _highlightLayout = nil;
     }
     
     if ((!self.selectable && !_highlight) || _state.ignoreTouchBegan) {
@@ -2590,6 +3367,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
                 [self _updateTextRangeByTrackingGrabber];
                 showMagnifierRanged = YES;
             } else if (_state.trackingPreSelect) {
+                self.panGestureRecognizer.enabled = NO;
                 [self _updateTextRangeByTrackingPreSelect];
                 showMagnifierCaret = YES;
             } else if (_state.trackingCaret || _markedTextRange || self.isFirstResponder) {
@@ -2651,8 +3429,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
         if (_highlight) {
             if (_state.showingHighlight) {
                 if (_highlight.tapAction) {
-                    CGRect rect = [_innerLayout rectForRange:[KKTextRange rangeWithRange:_highlightRange]];
-                    rect = [self _convertRectFromLayout:rect];
+                    CGRect rect = [self _rectForTextRange:[KKTextRange rangeWithRange:_highlightRange]];
                     _highlight.tapAction(self, _innerText, _highlightRange, rect);
                 } else {
                     BOOL shouldTap = YES;
@@ -2660,8 +3437,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
                         shouldTap = [self.delegate textView:self shouldTapHighlight:_highlight inRange:_highlightRange];
                     }
                     if (shouldTap && [self.delegate respondsToSelector:@selector(textView:didTapHighlight:inRange:rect:)]) {
-                        CGRect rect = [_innerLayout rectForRange:[KKTextRange rangeWithRange:_highlightRange]];
-                        rect = [self _convertRectFromLayout:rect];
+                        CGRect rect = [self _rectForTextRange:[KKTextRange rangeWithRange:_highlightRange]];
                         [self.delegate textView:self didTapHighlight:_highlight inRange:_highlightRange rect:rect];
                     }
                 }
@@ -2986,7 +3762,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
         [text replaceCharactersInRange:_selectedTextRange.asRange withAttributedString:atr];
         self.attributedText = text;
         KKTextPosition *pos = [self _correctedTextPosition:[KKTextPosition positionWithOffset:endPosition]];
-        KKTextRange *range = [_innerLayout textRangeByExtendingPosition:pos];
+        KKTextRange *range = [self _textRangeByExtendingTextPosition:pos];
         range = [self _correctedTextRange:range];
         if (range) {
             self.selectedRange = NSMakeRange(range.end.offset, 0);
@@ -3262,7 +4038,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     
     _state.deleteConfirm = NO;
     if (range.length == 0) {
-        KKTextRange *extendRange = [_innerLayout textRangeByExtendingPosition:_selectedTextRange.end inDirection:UITextLayoutDirectionLeft offset:1];
+        KKTextRange *extendRange = [self _textRangeByExtendingTextPosition:_selectedTextRange.end inDirection:UITextLayoutDirectionLeft offset:1];
         if ([self _isTextRangeValid:extendRange]) {
             range = extendRange.asRange;
         }
@@ -3345,11 +4121,14 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     
     if (!markedText) markedText = @"";
     if (_markedTextRange == nil) {
+        NSRange replaceRange = NSMakeRange(_selectedTextRange.end.offset, 0);
+        [self _recordParagraphEditRange:replaceRange replacementLength:markedText.length];
         _markedTextRange = [KKTextRange rangeWithRange:NSMakeRange(_selectedTextRange.end.offset, markedText.length)];
-        [_innerText replaceCharactersInRange:NSMakeRange(_selectedTextRange.end.offset, 0) withString:markedText];
+        [_innerText replaceCharactersInRange:replaceRange withString:markedText];
         _selectedTextRange = [KKTextRange rangeWithRange:NSMakeRange(_selectedTextRange.start.offset + selectedRange.location, selectedRange.length)];
     } else {
         _markedTextRange = [self _correctedTextRange:_markedTextRange];
+        [self _recordParagraphEditRange:_markedTextRange.asRange replacementLength:markedText.length];
         [_innerText replaceCharactersInRange:_markedTextRange.asRange withString:markedText];
         _markedTextRange = [KKTextRange rangeWithRange:NSMakeRange(_markedTextRange.start.offset, markedText.length)];
         _selectedTextRange = [KKTextRange rangeWithRange:NSMakeRange(_markedTextRange.start.offset + selectedRange.location, selectedRange.length)];
@@ -3508,7 +4287,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
     if (newLocation != 0 && newLocation != _innerText.length) {
         // fix emoji
         [self _updateIfNeeded];
-        KKTextRange *extendRange = [_innerLayout textRangeByExtendingPosition:[KKTextPosition positionWithOffset:newLocation]];
+        KKTextRange *extendRange = [self _textRangeByExtendingTextPosition:[KKTextPosition positionWithOffset:newLocation]];
         if (extendRange.asRange.length > 0) {
             if (offset < 0) {
                 newLocation = extendRange.start.offset;
@@ -3524,7 +4303,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
 
 - (KKTextPosition *)positionFromPosition:(KKTextPosition *)position inDirection:(UITextLayoutDirection)direction offset:(NSInteger)offset {
     [self _updateIfNeeded];
-    KKTextRange *range = [_innerLayout textRangeByExtendingPosition:position inDirection:direction offset:offset];
+    KKTextRange *range = [self _textRangeByExtendingTextPosition:position inDirection:direction offset:offset];
     
     BOOL forward;
     if (_innerContainer.isVerticalForm) {
@@ -3567,14 +4346,13 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
 
 - (KKTextRange *)characterRangeByExtendingPosition:(KKTextPosition *)position inDirection:(UITextLayoutDirection)direction {
     [self _updateIfNeeded];
-    KKTextRange *range = [_innerLayout textRangeByExtendingPosition:position inDirection:direction offset:1];
+    KKTextRange *range = [self _textRangeByExtendingTextPosition:position inDirection:direction offset:1];
     return [self _correctedTextRange:range];
 }
 
 - (KKTextPosition *)closestPositionToPoint:(CGPoint)point {
     [self _updateIfNeeded];
-    point = [self _convertPointToLayout:point];
-    KKTextPosition *position = [_innerLayout closestPositionToPoint:point];
+    KKTextPosition *position = [self _closestPositionForDocumentPoint:point];
     return [self _correctedTextPosition:position];
 }
 
@@ -3593,23 +4371,21 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
 
 - (KKTextRange *)characterRangeAtPoint:(CGPoint)point {
     [self _updateIfNeeded];
-    point = [self _convertPointToLayout:point];
-    KKTextRange *r = [_innerLayout closestTextRangeAtPoint:point];
+    KKTextRange *r = [self _textRangeAtDocumentPoint:point closest:YES];
     return [self _correctedTextRange:r];
 }
 
 - (CGRect)firstRectForRange:(KKTextRange *)range {
     [self _updateIfNeeded];
-    CGRect rect = [_innerLayout firstRectForRange:range];
+    CGRect rect = [self _firstRectForTextRange:range];
     if (CGRectIsNull(rect)) rect = CGRectZero;
-    return [self _convertRectFromLayout:rect];
+    return rect;
 }
 
 - (CGRect)caretRectForPosition:(KKTextPosition *)position {
     [self _updateIfNeeded];
-    CGRect caretRect = [_innerLayout caretRectForPosition:position];
+    CGRect caretRect = [self _caretRectForTextPosition:position];
     if (!CGRectIsNull(caretRect)) {
-        caretRect = [self _convertRectFromLayout:caretRect];
         caretRect = CGRectStandardize(caretRect);
         if (_verticalForm) {
             if (caretRect.size.height == 0) {
@@ -3639,11 +4415,7 @@ typedef NS_ENUM(NSUInteger, KKTextMoveDirection) {
 
 - (NSArray *)selectionRectsForRange:(KKTextRange *)range {
     [self _updateIfNeeded];
-    NSArray *rects = [_innerLayout selectionRectsForRange:range];
-    [rects enumerateObjectsUsingBlock:^(KKTextSelectionRect *rect, NSUInteger idx, BOOL *stop) {
-        rect.rect = [self _convertRectFromLayout:rect.rect];
-    }];
-    return rects;
+    return [self _selectionRectsForTextRange:range];
 }
 
 #pragma mark - @protocol UITextInput optional
