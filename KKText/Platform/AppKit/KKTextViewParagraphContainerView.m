@@ -18,10 +18,12 @@
 @implementation _KKTextViewParagraphContainerView
 
 - (BOOL)isFlipped {
+    // Use a top-left origin to match the KKTextView/documentView text coordinates.
     return YES;
 }
 
 - (BOOL)acceptsFirstResponder {
+    // The outer KKTextView owns first responder status; paragraph views only host content.
     return NO;
 }
 
