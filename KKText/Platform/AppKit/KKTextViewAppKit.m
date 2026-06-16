@@ -13,7 +13,9 @@
 #if KKTEXT_MAC
 
 #import "KKTextInput.h"
+#import "KKTextViewDocumentView.h"
 #import "KKTextViewParagraphContainerView.h"
+#import "KKTextViewSelectionView.h"
 #import "KKTextUtilities.h"
 #import "KKTextWeakProxy.h"
 #import "NSAttributedString+KKText.h"
@@ -44,12 +46,6 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
 @property (nonatomic) NSRange selectedRange;
 @end
 
-@class _KKTextViewSelectionView;
-
-@interface _KKTextViewSelectionView : NSView
-@property (nullable, nonatomic, weak) KKTextView *textView;
-@end
-
 @implementation _KKTextViewUndoState
 
 + (instancetype)stateWithText:(NSAttributedString *)text selectedRange:(NSRange)selectedRange {
@@ -59,10 +55,6 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     return state;
 }
 
-@end
-
-@interface _KKTextViewDocumentView : NSView
-@property (nullable, nonatomic, weak) KKTextView *textView;
 @end
 
 @interface KKTextView ()
@@ -2441,80 +2433,6 @@ static inline void KKTextViewFlipContextVertically(CGContextRef context, CGSize 
     if (action == @selector(undo:)) return _editable && [self _canUndo];
     if (action == @selector(redo:)) return _editable && [self _canRedo];
     return [super respondsToSelector:action];
-}
-
-@end
-
-@implementation _KKTextViewSelectionView
-
-- (BOOL)isFlipped {
-    return YES;
-}
-
-- (BOOL)acceptsFirstResponder {
-    return NO;
-}
-
-- (void)drawRect:(NSRect)dirtyRect {
-    [super drawRect:dirtyRect];
-    [self.textView _drawSelectionViewInRect:dirtyRect];
-}
-
-- (void)mouseDown:(NSEvent *)event {
-    [self.textView mouseDown:event];
-}
-
-- (void)mouseDragged:(NSEvent *)event {
-    [self.textView mouseDragged:event];
-}
-
-- (void)mouseUp:(NSEvent *)event {
-    [self.textView mouseUp:event];
-}
-
-- (void)rightMouseDown:(NSEvent *)event {
-    [self.textView rightMouseDown:event];
-}
-
-- (NSMenu *)menuForEvent:(NSEvent *)event {
-    return [self.textView menuForEvent:event];
-}
-
-@end
-
-@implementation _KKTextViewDocumentView
-
-- (BOOL)isFlipped {
-    return YES;
-}
-
-- (BOOL)acceptsFirstResponder {
-    return NO;
-}
-
-- (void)drawRect:(NSRect)dirtyRect {
-    [super drawRect:dirtyRect];
-    [self.textView _drawDocumentViewInRect:dirtyRect];
-}
-
-- (void)mouseDown:(NSEvent *)event {
-    [self.textView mouseDown:event];
-}
-
-- (void)mouseDragged:(NSEvent *)event {
-    [self.textView mouseDragged:event];
-}
-
-- (void)mouseUp:(NSEvent *)event {
-    [self.textView mouseUp:event];
-}
-
-- (void)rightMouseDown:(NSEvent *)event {
-    [self.textView rightMouseDown:event];
-}
-
-- (NSMenu *)menuForEvent:(NSEvent *)event {
-    return [self.textView menuForEvent:event];
 }
 
 @end
